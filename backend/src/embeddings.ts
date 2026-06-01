@@ -1,0 +1,134 @@
+import { config } from './config.js';
+
+type RuntimeEmbeddingStyle = 'openai' | 'anthropic' | 'openai_compatible';
+
+type EmbeddingResponse = {
+  data?: Array<{ embedding?: number[]; index?: number; }>;
+};
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/$/, '');
+}
+
+function resolveEmbeddingStyle(): RuntimeEmbeddingStyle {
+  if (config.EMBEDDING_API_STYLE === 'same_as_llm') {
+    if (config.LLM_API_STYLE === 'openai') return 'openai';
+    if (config.LLM_API_STYLE === 'openai_compatible') return 'openai_compatible';
+    return 'anthropic';
+  }
+  return config.EMBEDDING_API_STYLE;
+}
+
+function resolveEmbeddingModel(style: RuntimeEmbeddingStyle): string {
+  if (config.EMBEDDING_MODEL?.trim()) return config.EMBEDDING_MODEL.trim();
+  if (style === 'openai' || style === 'openai_compatible') return 'text-embedding-3-small';
+  return 'voyage-3.5';
+}
+
+function resolveEmbeddingBaseUrl(): string {
+  return normalizeBaseUrl(config.EMBEDDING_BASE_URL?.trim() || config.LLM_BASE_URL);
+}
+
+function resolveEmbeddingApiKey(): string {
+  const key = config.EMBEDDING_API_KEY?.trim() || config.LLM_API_KEY;
+  if (!key) {
+    throw new Error('Embedding API key is missing. Set EMBEDDING_API_KEY or LLM_API_KEY.');
+  }
+  return key;
+}
+
+function buildEndpoint(style: RuntimeEmbeddingStyle, baseUrl: string): string {
+  if (style === 'openai' || style === 'openai_compatible') {
+    if (baseUrl.endsWith('/v1')) return `${baseUrl}/embeddings`;
+    return `${baseUrl}/v1/embeddings`;
+  }
+
+  if (baseUrl.endsWith('/v1')) return `${baseUrl}/embeddings`;
+  return `${baseUrl}/v1/embeddings`;
+}
+
+function buildHeaders(style: RuntimeEmbeddingStyle, apiKey: string): Record<string, string> {
+  if (style === 'anthropic') {
+    return {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': config.ANTHROPIC_VERSION,
+      Authorization: `Bearer ${apiKey}`
+    };
+  }
+
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`
+  };
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  if (!denom) return 0;
+  return dot / denom;
+}
+
+async function requestEmbeddings(values: string[]): Promise<number[][]> {
+  if (!values.length) return [];
+
+  const style = resolveEmbeddingStyle();
+  const model = resolveEmbeddingModel(style);
+  const baseUrl = resolveEmbeddingBaseUrl();
+  const apiKey = resolveEmbeddingApiKey();
+  const endpoint = buildEndpoint(style, baseUrl);
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: buildHeaders(style, apiKey),
+    body: JSON.stringify({
+      model,
+      input: values
+    })
+  });
+
+  if (!response.ok) {
+    const payload = await response.text().catch(() => '');
+    throw new Error(`Embedding request failed (${response.status}). ${payload.slice(0, 400)}`);
+  }
+
+  const payload = await response.json() as EmbeddingResponse;
+  const data = payload.data ?? [];
+  if (data.length !== values.length) {
+    throw new Error(`Embedding response length mismatch: expected ${values.length}, got ${data.length}`);
+  }
+
+  return data.map((item, idx) => {
+    const vector = item.embedding;
+    if (!Array.isArray(vector) || !vector.length || !vector.every((n) => Number.isFinite(n))) {
+      throw new Error(`Invalid embedding vector for input index ${idx}`);
+    }
+    return vector;
+  });
+}
+
+export async function embedTexts(values: string[]): Promise<number[][]> {
+  const out: number[][] = [];
+  for (let i = 0; i < values.length; i += config.EMBEDDING_BATCH_SIZE) {
+    const slice = values.slice(i, i + config.EMBEDDING_BATCH_SIZE);
+    const vectors = await requestEmbeddings(slice);
+    out.push(...vectors);
+  }
+  return out;
+}
+
+export function rankByEmbeddingSimilarity(
+  queryEmbedding: number[],
+  candidateEmbeddings: number[][]
+): number[] {
+  return candidateEmbeddings.map((embedding) => cosineSimilarity(queryEmbedding, embedding));
+}

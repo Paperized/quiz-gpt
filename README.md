@@ -49,22 +49,18 @@ docker compose up --build
 
 App is served at `http://localhost:3000`.
 
-## Source-grounded quiz generation (documents + GitHub)
+## Source-grounded generation strategy (large docs/repos)
 
-In quiz creation you can provide:
+When you pass `sourceText`, uploaded docs, or `githubRepoUrl`, backend does:
 
-- `sourceText` (manual notes / pasted docs)
-- `documents` upload (`.pdf`, `.docx`, markdown/text/code files)
-- `githubRepoUrl` (public repo URL)
+1. Extract and normalize text.
+2. Chunk corpus.
+3. Lexical pre-filter for candidate pruning.
+4. **Remote embeddings retrieval** (provider API), not local embedding models.
+5. Rank by semantic similarity + lexical prior.
+6. Send only top chunks to the LLM (`MAX_RETRIEVED_*` budgets).
 
-The backend uses a retrieval strategy to avoid context overflow:
-
-1. Ingest and normalize text from inputs.
-2. Split text into chunks.
-3. Rank chunks by topic/settings relevance + path priority (README/docs/src weighting).
-4. Send only top chunks to the model (`MAX_RETRIEVED_CHUNKS`, `MAX_RETRIEVED_CHARS`).
-
-This supports large repositories/doc sets without dumping all content into one prompt.
+This avoids context explosion on big repositories.
 
 ## Environment variables
 
@@ -74,37 +70,49 @@ This supports large repositories/doc sets without dumping all content into one p
 | `PUBLIC_URL` | Yes | `http://localhost:3000` | Public app URL injected via runtime `/config.js` |
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
 | `LLM_API_STYLE` | No | `openai` | `openai`, `anthropic`, `openai_compatible` |
-| `LLM_BASE_URL` | Yes | `https://api.openai.com/v1` | Provider base URL |
-| `LLM_API_KEY` | Yes for generation | empty | Provider API key |
-| `LLM_MODEL` | Yes | `gpt-4o` | Model ID |
-| `LLM_MAX_TOKENS` | No | `2000` | Max model output tokens |
+| `LLM_BASE_URL` | Yes | `https://api.openai.com/v1` | LLM provider base URL |
+| `LLM_API_KEY` | Yes for generation | empty | LLM API key |
+| `LLM_MODEL` | Yes | `gpt-4o` | LLM model ID |
+| `LLM_MAX_TOKENS` | No | `2000` | Max output tokens |
 | `LLM_TEMPERATURE` | No | `0.7` | Sampling temperature |
 | `ANTHROPIC_VERSION` | Anthropic only | `2023-06-01` | `anthropic-version` header |
-| `GITHUB_TOKEN` | Optional | empty | Improves GitHub API rate limits/private access if allowed |
-| `MAX_RETRIEVED_CHUNKS` | No | `16` | Max retrieved chunks sent to model |
-| `MAX_RETRIEVED_CHARS` | No | `28000` | Max characters sent from retrieved context |
+| `EMBEDDING_API_STYLE` | No | `same_as_llm` | `same_as_llm`, `openai`, `anthropic`, `openai_compatible` |
+| `EMBEDDING_BASE_URL` | No | empty | Optional embeddings base URL override |
+| `EMBEDDING_API_KEY` | No | empty | Optional embeddings API key override |
+| `EMBEDDING_MODEL` | No | `text-embedding-3-small` | Embedding model ID |
+| `MAX_EMBEDDING_CANDIDATES` | No | `220` | Max chunk candidates to embed |
+| `EMBEDDING_BATCH_SIZE` | No | `64` | Batch size per embeddings request |
+| `GITHUB_TOKEN` | Optional | empty | Improves GitHub API rate limits/private access |
+| `MAX_RETRIEVED_CHUNKS` | No | `16` | Top chunks sent to LLM |
+| `MAX_RETRIEVED_CHARS` | No | `28000` | Character budget sent to LLM |
 
 ## Provider examples
 
-### OpenAI (official)
+### OpenAI (LLM + embeddings)
 
 ```env
 LLM_API_STYLE=openai
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=sk-...
 LLM_MODEL=gpt-4o
+EMBEDDING_API_STYLE=same_as_llm
+EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-### OpenAI-compatible providers (Ollama / LM Studio / gateways)
+### OpenAI-compatible (Ollama / LM Studio / gateways)
 
 ```env
 LLM_API_STYLE=openai_compatible
 LLM_BASE_URL=http://localhost:11434/v1
 LLM_API_KEY=ollama
-LLM_MODEL=llama3.1
+LLM_MODEL=qwen3:32b
+EMBEDDING_API_STYLE=same_as_llm
+EMBEDDING_MODEL=nomic-embed-text
 ```
 
-### Anthropic-compatible (Claude or compatible endpoints)
+### Anthropic LLM + external embeddings endpoint
+
+Anthropic docs currently state they do not provide native embedding models; use a separate embeddings provider.
 
 ```env
 LLM_API_STYLE=anthropic
@@ -112,19 +120,14 @@ LLM_BASE_URL=https://api.anthropic.com
 LLM_API_KEY=sk-ant-...
 LLM_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_VERSION=2023-06-01
-```
 
-### Anthropic-compatible endpoint with models like `qwen3.7-max`
-
-```env
-LLM_API_STYLE=anthropic
-LLM_BASE_URL=https://<provider-anthropic-endpoint>
-LLM_API_KEY=<provider-key>
-LLM_MODEL=qwen3.7-max
-ANTHROPIC_VERSION=2023-06-01
+EMBEDDING_API_STYLE=openai_compatible
+EMBEDDING_BASE_URL=https://<embedding-provider>/v1
+EMBEDDING_API_KEY=<embedding-key>
+EMBEDDING_MODEL=voyage-3.5
 ```
 
 ## Notes
 
-- If you want LiteLLM, connect it as external endpoint via `LLM_BASE_URL` + `LLM_API_KEY` (no internal gateway dependency needed).
-- For very large/private GitHub repos, set `GITHUB_TOKEN` to avoid strict unauthenticated rate limits.
+- If you want LiteLLM, connect it as external endpoint via `LLM_BASE_URL` / `EMBEDDING_BASE_URL`.
+- For very large/private GitHub repos, set `GITHUB_TOKEN`.

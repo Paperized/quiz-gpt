@@ -13,7 +13,13 @@ const configSchema = z.object({
   ANTHROPIC_VERSION: z.string().default('2023-06-01'),
   GITHUB_TOKEN: z.string().optional(),
   MAX_RETRIEVED_CHUNKS: z.coerce.number().int().min(4).max(40).default(16),
-  MAX_RETRIEVED_CHARS: z.coerce.number().int().min(4000).max(120000).default(28000)
+  MAX_RETRIEVED_CHARS: z.coerce.number().int().min(4000).max(120000).default(28000),
+  MAX_EMBEDDING_CANDIDATES: z.coerce.number().int().min(20).max(500).default(220),
+  EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(4).max(256).default(64),
+  EMBEDDING_API_STYLE: z.enum(['same_as_llm', 'openai', 'anthropic', 'openai_compatible']).default('same_as_llm'),
+  EMBEDDING_BASE_URL: z.string().optional(),
+  EMBEDDING_API_KEY: z.string().optional(),
+  EMBEDDING_MODEL: z.string().optional()
 });
 
 export const config = configSchema.parse(process.env);

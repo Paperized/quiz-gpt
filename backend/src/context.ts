@@ -1,6 +1,7 @@
 import mammoth from 'mammoth';
 import pdfParse from '@cedrugs/pdf-parse';
 import { config } from './config.js';
+import { embedTexts, rankByEmbeddingSimilarity } from './embeddings.js';
 
 export type SourceInputs = {
   sourceText?: string;
@@ -17,6 +18,8 @@ type SourceDocument = {
 type ScoredChunk = {
   label: string;
   score: number;
+  lexicalScore: number;
+  semanticScore?: number;
   text: string;
 };
 
@@ -245,7 +248,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
   return repoDocs;
 }
 
-function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[]): string {
+async function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[]): Promise<string> {
   const queryTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
   const chunks: ScoredChunk[] = [];
 
@@ -266,18 +269,42 @@ function buildRetrievedContext(topic: string, settingsSummary: string, documents
       }
 
       const uniqueness = new Set(terms).size;
-      const score = (overlap * 6) + Math.min(uniqueness / 90, 2.5) + docBoost;
-      if (score <= docBoost) continue;
+      const lexicalScore = (overlap * 6) + Math.min(uniqueness / 90, 2.5) + docBoost;
+      if (lexicalScore <= docBoost) continue;
 
       chunks.push({
         label: doc.label,
-        score,
+        score: lexicalScore,
+        lexicalScore,
         text: chunk
       });
     }
   }
 
-  const selected = chunks
+  const preSelected = chunks
+    .sort((a, b) => b.score - a.score)
+    .slice(0, config.MAX_EMBEDDING_CANDIDATES);
+
+  if (!preSelected.length) return '';
+
+  try {
+    const query = `Topic: ${topic}\nSettings: ${settingsSummary}`;
+    const embeddings = await embedTexts([query, ...preSelected.map((chunk) => chunk.text)]);
+    const queryEmbedding = embeddings[0];
+    const candidateEmbeddings = embeddings.slice(1);
+    const semanticScores = rankByEmbeddingSimilarity(queryEmbedding, candidateEmbeddings);
+
+    preSelected.forEach((chunk, idx) => {
+      const semantic = semanticScores[idx] ?? 0;
+      chunk.semanticScore = semantic;
+      chunk.score = (semantic * 100) + chunk.lexicalScore;
+    });
+  } catch (error) {
+    // Fallback to lexical ranking if embedding provider is unavailable.
+    console.warn('Embedding retrieval failed, falling back to lexical ranking:', error);
+  }
+
+  const selected = preSelected
     .sort((a, b) => b.score - a.score)
     .slice(0, config.MAX_RETRIEVED_CHUNKS);
 
@@ -328,6 +355,6 @@ export async function buildSourceContext(topic: string, settingsSummary: string,
     return '';
   }
 
-  const context = buildRetrievedContext(topic, settingsSummary, docs);
+  const context = await buildRetrievedContext(topic, settingsSummary, docs);
   return trimForBudget(context, config.MAX_RETRIEVED_CHARS);
 }
