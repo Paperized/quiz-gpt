@@ -25,6 +25,7 @@ type Quiz = {
   createdAt: string;
   pinned: boolean;
   pinnedAt: string | null;
+  contextUsed?: boolean;
 };
 
 type AttemptHistory = {
@@ -88,6 +89,9 @@ export function App() {
   const [settings, setSettings] = useState<QuizSettings>(defaultSettings);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sourceText, setSourceText] = useState('');
+  const [githubRepoUrl, setGithubRepoUrl] = useState('');
+  const [documents, setDocuments] = useState<File[]>([]);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [submitted, setSubmitted] = useState(false);
   const [startedAt, setStartedAt] = useState<string | null>(null);
@@ -183,12 +187,23 @@ export function App() {
     setLoading(true);
     setError(null);
     try {
+      const form = new FormData();
+      form.append('topic', topic);
+      form.append('settings', JSON.stringify(settings));
+      if (sourceText.trim()) form.append('sourceText', sourceText.trim());
+      if (githubRepoUrl.trim()) form.append('githubRepoUrl', githubRepoUrl.trim());
+      for (const file of documents) {
+        form.append('documents', file);
+      }
+
       const quiz = await req<Quiz>('/api/quizzes/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, settings })
+        body: form
       });
       setTopic('');
+      setSourceText('');
+      setGithubRepoUrl('');
+      setDocuments([]);
       await loadQuizzes();
       setSelectedId(quiz.id);
       setActiveSection('quiz');
@@ -311,6 +326,20 @@ export function App() {
           <section className="panel">
             <h2>Create a quiz</h2>
             <textarea value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Describe your quiz topic" rows={4} />
+            <textarea value={sourceText} onChange={(e) => setSourceText(e.target.value)} placeholder="Optional source text or notes for grounded quiz generation" rows={5} />
+            <label>
+              Optional GitHub repository URL
+              <input value={githubRepoUrl} onChange={(e) => setGithubRepoUrl(e.target.value)} placeholder="https://github.com/owner/repo" />
+            </label>
+            <label>
+              Optional documents (.pdf, .docx, .md, .txt, code files)
+              <input
+                type="file"
+                multiple
+                onChange={(e) => setDocuments(Array.from(e.target.files ?? []))}
+              />
+            </label>
+            {documents.length > 0 && <small>{documents.length} document(s) selected</small>}
             <div className="grid">
               <label>Min Questions <input type="number" value={settings.minQuestions} onChange={(e) => setSettings({ ...settings, minQuestions: Number(e.target.value) })} /></label>
               <label>Max Questions <input type="number" value={settings.maxQuestions} onChange={(e) => setSettings({ ...settings, maxQuestions: Number(e.target.value) })} /></label>
@@ -338,6 +367,7 @@ export function App() {
           <section className="panel">
             <h2>{selectedQuiz.title}</h2>
             <p>{selectedQuiz.topic}</p>
+            {selectedQuiz.contextUsed && <small>Generated with retrieved source context</small>}
             <div className="row">
               <label>View
                 <select value={viewMode} onChange={(e) => setViewMode(e.target.value as 'all' | 'one')}>

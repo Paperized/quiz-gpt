@@ -1,6 +1,12 @@
+import { generateObject } from 'ai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { config } from './config.js';
 import type { QuizQuestion, QuizSettings } from './types.js';
+import type { SourceInputs } from './context.js';
+import { buildSourceContext } from './context.js';
 
 const outputSchema = z.object({
   title: z.string().min(3),
@@ -12,116 +18,36 @@ const outputSchema = z.object({
   })).min(1)
 });
 
-function extractJson(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const block = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    if (block?.[1]) {
-      return JSON.parse(block[1]);
-    }
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      return JSON.parse(raw.slice(start, end + 1));
-    }
-    throw new Error('No valid JSON found in LLM output');
+function getModel() {
+  if (!config.LLM_API_KEY) {
+    throw new Error('LLM_API_KEY is empty. Set it to generate quizzes.');
   }
-}
 
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/$/, '');
-}
-
-function withPath(baseUrl: string, path: string): string {
-  return `${normalizeBaseUrl(baseUrl)}${path}`;
-}
-
-function parseOpenAIError(status: number, payload: unknown): string {
-  if (payload && typeof payload === 'object' && 'error' in payload) {
-    const err = (payload as { error?: { message?: string; }; }).error;
-    if (err?.message) {
-      return `LLM request failed (${status}): ${err.message}`;
-    }
+  if (config.LLM_API_STYLE === 'anthropic') {
+    const anthropic = createAnthropic({
+      apiKey: config.LLM_API_KEY,
+      baseURL: config.LLM_BASE_URL,
+      headers: {
+        'anthropic-version': config.ANTHROPIC_VERSION
+      }
+    });
+    return anthropic(config.LLM_MODEL);
   }
-  return `LLM request failed with status ${status}`;
-}
 
-async function requestOpenAICompatible(system: string, user: string): Promise<string> {
-  const response = await fetch(withPath(config.LLM_BASE_URL, '/chat/completions'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.LLM_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: config.LLM_MODEL,
-      temperature: config.LLM_TEMPERATURE,
-      max_tokens: config.LLM_MAX_TOKENS,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ]
-    })
+  if (config.LLM_API_STYLE === 'openai_compatible') {
+    const provider = createOpenAICompatible({
+      name: 'compatible',
+      apiKey: config.LLM_API_KEY,
+      baseURL: config.LLM_BASE_URL
+    });
+    return provider(config.LLM_MODEL);
+  }
+
+  const openai = createOpenAI({
+    apiKey: config.LLM_API_KEY,
+    baseURL: config.LLM_BASE_URL
   });
-
-  if (!response.ok) {
-    throw new Error(parseOpenAIError(response.status, await response.json().catch(() => ({}))));
-  }
-
-  const payload = await response.json() as {
-    choices?: Array<{ message?: { content?: string; }; }>;
-  };
-
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error('LLM response did not include content');
-  }
-  return content;
-}
-
-async function requestAnthropicCompatible(system: string, user: string): Promise<string> {
-  const base = normalizeBaseUrl(config.LLM_BASE_URL);
-  const path = base.endsWith('/v1') ? '/messages' : '/v1/messages';
-
-  const response = await fetch(withPath(base, path), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': config.LLM_API_KEY,
-      'anthropic-version': config.ANTHROPIC_VERSION,
-      Authorization: `Bearer ${config.LLM_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: config.LLM_MODEL,
-      max_tokens: config.LLM_MAX_TOKENS,
-      temperature: config.LLM_TEMPERATURE,
-      system,
-      messages: [
-        { role: 'user', content: user }
-      ]
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(parseOpenAIError(response.status, await response.json().catch(() => ({}))));
-  }
-
-  const payload = await response.json() as {
-    content?: Array<{ type?: string; text?: string; }>;
-  };
-
-  const text = payload.content
-    ?.filter((block) => block.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text)
-    .join('\n')
-    .trim();
-
-  if (!text) {
-    throw new Error('LLM response did not include text content');
-  }
-  return text;
+  return openai(config.LLM_MODEL);
 }
 
 function sanitizeQuestions(
@@ -149,27 +75,59 @@ function sanitizeQuestions(
   });
 }
 
-export async function generateQuizFromLLM(topic: string, settings: QuizSettings): Promise<{ title: string; questions: QuizQuestion[]; }> {
-  if (!config.LLM_API_KEY) {
-    throw new Error('LLM_API_KEY is empty. Set it to generate quizzes.');
-  }
+export async function generateQuizFromLLM(
+  topic: string,
+  settings: QuizSettings,
+  sources: SourceInputs
+): Promise<{ title: string; questions: QuizQuestion[]; contextUsed: boolean; }> {
+  const settingsSummary = [
+    `minQuestions=${settings.minQuestions}`,
+    `maxQuestions=${settings.maxQuestions}`,
+    `choicesPerQuestion=${settings.choicesPerQuestion}`,
+    `difficulty=${settings.difficulty}`,
+    `language=${settings.language}`,
+    `questionType=${settings.questionType}`
+  ].join('; ');
 
-  const system = 'You are a quiz generator. Return only valid JSON with no additional prose.';
-  const user = `Generate a quiz as JSON with this exact structure: {"title": string, "questions": [{"question": string, "choices": string[], "correctIndex": number, "explanation"?: string}]}. Constraints: topic=${topic}; minQuestions=${settings.minQuestions}; maxQuestions=${settings.maxQuestions}; choicesPerQuestion=${settings.choicesPerQuestion}; difficulty=${settings.difficulty}; language=${settings.language}; questionType=${settings.questionType}. For true/false mode, choices must be exactly ["True", "False"]. correctIndex must always be valid for choices.`;
+  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources);
+  const model = getModel();
 
-  const content = config.LLM_API_STYLE === 'anthropic'
-    ? await requestAnthropicCompatible(system, user)
-    : await requestOpenAICompatible(system, user);
+  const system = [
+    'You are a quiz generator.',
+    'Return only structured JSON that conforms to the requested schema.',
+    'Questions must be answerable from the topic and provided source material when available.',
+    'Do not invent unsupported facts when the source material is provided.'
+  ].join(' ');
 
-  let parsed: z.infer<typeof outputSchema>;
+  const prompt = [
+    `Topic: ${topic}`,
+    `Constraints: ${settingsSummary}`,
+    'Output schema:',
+    '{"title": string, "questions": [{"question": string, "choices": string[], "correctIndex": number, "explanation"?: string}]}',
+    'For true_false mode, choices must be exactly ["True", "False"].',
+    retrievedContext
+      ? `Source material (retrieved excerpts):\n${retrievedContext}`
+      : 'No source material provided. Use your general knowledge for the requested topic.'
+  ].join('\n\n');
+
+  let generated: z.infer<typeof outputSchema>;
   try {
-    parsed = outputSchema.parse(extractJson(content));
+    const { object } = await generateObject({
+      model,
+      schema: outputSchema,
+      temperature: config.LLM_TEMPERATURE,
+      maxOutputTokens: config.LLM_MAX_TOKENS,
+      system,
+      prompt
+    });
+    generated = outputSchema.parse(object);
   } catch (error) {
-    throw new Error(`LLM returned malformed JSON: ${error instanceof Error ? error.message : 'unknown error'}`);
+    throw new Error(`LLM generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 
   return {
-    title: parsed.title,
-    questions: sanitizeQuestions(parsed, settings)
+    title: generated.title,
+    questions: sanitizeQuestions(generated, settings),
+    contextUsed: Boolean(retrievedContext)
   };
 }

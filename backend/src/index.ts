@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +10,13 @@ import { generateQuizFromLLM } from './llm.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    files: 8,
+    fileSize: 10 * 1024 * 1024
+  }
+});
 
 const quizSettingsSchema = z.object({
   minQuestions: z.number().int().min(1).max(100),
@@ -34,7 +42,9 @@ const quizSettingsSchema = z.object({
 
 const generateQuizSchema = z.object({
   topic: z.string().trim().min(3),
-  settings: quizSettingsSchema
+  settings: quizSettingsSchema,
+  sourceText: z.string().trim().max(250_000).optional(),
+  githubRepoUrl: z.string().trim().url().optional()
 });
 
 const updateQuizSchema = z.object({
@@ -90,20 +100,41 @@ app.get('/api/quizzes', async (_req, res) => {
   })));
 });
 
-app.post('/api/quizzes/generate', async (req, res) => {
+app.post('/api/quizzes/generate', upload.array('documents', 8), async (req, res) => {
   try {
-    const parsed = generateQuizSchema.safeParse(req.body);
+    let topic: unknown = req.body.topic;
+    let settings: unknown = req.body.settings;
+    let sourceText: unknown = req.body.sourceText;
+    let githubRepoUrl: unknown = req.body.githubRepoUrl;
+
+    if (typeof settings === 'string') {
+      try {
+        settings = JSON.parse(settings);
+      } catch {
+        return res.status(400).json({ error: 'settings must be valid JSON' });
+      }
+    }
+
+    const parsed = generateQuizSchema.safeParse({
+      topic,
+      settings,
+      sourceText: typeof sourceText === 'string' && sourceText.trim().length ? sourceText : undefined,
+      githubRepoUrl: typeof githubRepoUrl === 'string' && githubRepoUrl.trim().length ? githubRepoUrl : undefined
+    });
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
     }
-    const { topic, settings } = parsed.data;
-    const llm = await generateQuizFromLLM(topic, settings);
+    const llm = await generateQuizFromLLM(parsed.data.topic, parsed.data.settings, {
+      sourceText: parsed.data.sourceText,
+      githubRepoUrl: parsed.data.githubRepoUrl,
+      documents: req.files as Express.Multer.File[] | undefined
+    });
     const id = randomUUID();
     const result = await pool.query(`
       INSERT INTO quizzes(id, title, topic, settings, questions)
       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
       RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at
-    `, [id, llm.title, topic, JSON.stringify(settings), JSON.stringify(llm.questions)]);
+    `, [id, llm.title, parsed.data.topic, JSON.stringify(parsed.data.settings), JSON.stringify(llm.questions)]);
     const q = result.rows[0];
     return res.status(201).json({
       id: q.id,
@@ -113,7 +144,8 @@ app.post('/api/quizzes/generate', async (req, res) => {
       questions: q.questions,
       createdAt: q.created_at,
       pinned: q.pinned,
-      pinnedAt: q.pinned_at
+      pinnedAt: q.pinned_at,
+      contextUsed: llm.contextUsed
     });
   } catch (error) {
     return res.status(422).json({ error: error instanceof Error ? error.message : 'Quiz generation failed' });

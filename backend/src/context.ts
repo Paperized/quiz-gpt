@@ -1,0 +1,333 @@
+import mammoth from 'mammoth';
+import pdfParse from '@cedrugs/pdf-parse';
+import { config } from './config.js';
+
+export type SourceInputs = {
+  sourceText?: string;
+  githubRepoUrl?: string;
+  documents?: Express.Multer.File[];
+};
+
+type SourceDocument = {
+  id: string;
+  label: string;
+  text: string;
+};
+
+type ScoredChunk = {
+  label: string;
+  score: number;
+  text: string;
+};
+
+const MAX_SOURCE_TEXT_CHARS = 250_000;
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_REPO_FILES_TO_FETCH = 240;
+const MAX_REPO_TOTAL_CHARS = 900_000;
+const CHUNK_SIZE = 1400;
+const CHUNK_OVERLAP = 180;
+
+const textExtensions = new Set([
+  '.txt', '.md', '.mdx', '.csv', '.json', '.yaml', '.yml', '.toml', '.ini', '.conf',
+  '.xml', '.html', '.htm', '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.go', '.rs',
+  '.rb', '.php', '.c', '.h', '.cpp', '.hpp', '.cs', '.kt', '.swift', '.scala', '.sh', '.sql',
+  '.dart', '.vue', '.svelte', '.ipynb'
+]);
+
+const excludedPathParts = [
+  'node_modules/', '.git/', 'dist/', 'build/', '.next/', 'coverage/', 'vendor/',
+  'target/', '.venv/', '__pycache__/', 'binary/', 'binaries/'
+];
+
+function fileExtension(fileName: string): string {
+  const idx = fileName.lastIndexOf('.');
+  return idx >= 0 ? fileName.slice(idx).toLowerCase() : '';
+}
+
+function trimForBudget(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  return `${text.slice(0, budget)}\n\n[truncated]`;
+}
+
+function normalizeWhitespace(value: string): string {
+  return value
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function tokenize(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 3);
+}
+
+function isProbablyText(contentType: string | null, path: string): boolean {
+  const ext = fileExtension(path);
+  if (textExtensions.has(ext) || ext === '.pdf' || ext === '.docx') return true;
+  if (!contentType) return false;
+  return contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml');
+}
+
+function splitIntoChunks(text: string, maxChars = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) return [];
+
+  const paragraphs = normalized.split('\n\n');
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const p of paragraphs) {
+    if (!current) {
+      current = p;
+      continue;
+    }
+
+    if ((current.length + 2 + p.length) <= maxChars) {
+      current = `${current}\n\n${p}`;
+      continue;
+    }
+
+    chunks.push(current);
+    const tail = current.slice(Math.max(0, current.length - overlap));
+    current = tail ? `${tail}\n\n${p}` : p;
+
+    if (current.length > maxChars) {
+      chunks.push(current.slice(0, maxChars));
+      current = current.slice(maxChars - overlap);
+    }
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+async function extractTextFromBuffer(fileName: string, mimeType: string | undefined, buffer: Buffer): Promise<string> {
+  const ext = fileExtension(fileName);
+
+  if (ext === '.pdf' || mimeType === 'application/pdf') {
+    const parsed = await pdfParse(buffer);
+    return parsed.text ?? '';
+  }
+
+  if (ext === '.docx' || mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const parsed = await mammoth.extractRawText({ buffer });
+    return parsed.value;
+  }
+
+  return buffer.toString('utf-8');
+}
+
+function parseGitHubRepoUrl(url: string): { owner: string; repo: string; ref?: string; } | null {
+  const match = url.trim().match(/^https?:\/\/github\.com\/([^/]+)\/([^/#?]+)(?:\/tree\/([^/?#]+))?/i);
+  if (!match) return null;
+  return {
+    owner: match[1],
+    repo: match[2].replace(/\.git$/i, ''),
+    ref: match[3]
+  };
+}
+
+function isAllowedRepoPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  if (excludedPathParts.some((p) => lower.includes(p))) return false;
+  return textExtensions.has(fileExtension(lower));
+}
+
+function scorePathPriority(path: string): number {
+  const lower = path.toLowerCase();
+  let score = 0;
+  if (lower.includes('readme')) score += 8;
+  if (lower.includes('/docs/') || lower.startsWith('docs/')) score += 7;
+  if (lower.includes('guide') || lower.includes('tutorial')) score += 4;
+  if (lower.includes('src/')) score += 2;
+  return score;
+}
+
+function scorePathByTopic(path: string, topicTerms: Set<string>): number {
+  const pathTerms = tokenize(path);
+  let score = 0;
+  for (const t of pathTerms) {
+    if (topicTerms.has(t)) score += 2;
+  }
+  return score;
+}
+
+async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<string>): Promise<SourceDocument[]> {
+  const parsed = parseGitHubRepoUrl(githubRepoUrl);
+  if (!parsed) {
+    throw new Error('Invalid GitHub repository URL. Expected format: https://github.com/{owner}/{repo}[/tree/{ref}]');
+  }
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'learn-gpt'
+  };
+  if (config.GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${config.GITHUB_TOKEN}`;
+  }
+
+  const repoRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}`, { headers });
+  if (!repoRes.ok) {
+    throw new Error(`Unable to fetch repository metadata (${repoRes.status})`);
+  }
+  const repoJson = await repoRes.json() as { default_branch?: string; };
+  const ref = parsed.ref ?? repoJson.default_branch;
+  if (!ref) {
+    throw new Error('Unable to detect repository default branch');
+  }
+
+  const treeRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, { headers });
+  if (!treeRes.ok) {
+    throw new Error(`Unable to fetch repository tree (${treeRes.status})`);
+  }
+
+  const treeJson = await treeRes.json() as {
+    truncated?: boolean;
+    tree?: Array<{ path?: string; type?: string; size?: number; }>;
+  };
+
+  const candidates = (treeJson.tree ?? [])
+    .filter((entry) => entry.type === 'blob' && typeof entry.path === 'string')
+    .map((entry) => ({
+      path: entry.path as string,
+      size: entry.size ?? 0,
+      priority: scorePathPriority(entry.path as string),
+      topicPathScore: scorePathByTopic(entry.path as string, topicTerms)
+    }))
+    .filter((entry) => isAllowedRepoPath(entry.path) && entry.size > 0 && entry.size <= MAX_FILE_BYTES)
+    .sort((a, b) => {
+      if (b.topicPathScore !== a.topicPathScore) return b.topicPathScore - a.topicPathScore;
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.size - b.size;
+    })
+    .slice(0, MAX_REPO_FILES_TO_FETCH);
+
+  const repoDocs: SourceDocument[] = [];
+  let totalChars = 0;
+
+  for (const entry of candidates) {
+    if (totalChars >= MAX_REPO_TOTAL_CHARS) break;
+
+    const safeRef = ref.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    const safePath = entry.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    const rawUrl = `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${safeRef}/${safePath}`;
+    const fileRes = await fetch(rawUrl, { headers: { 'User-Agent': 'learn-gpt' } });
+    if (!fileRes.ok) continue;
+
+    const contentType = fileRes.headers.get('content-type');
+    if (!isProbablyText(contentType, entry.path)) continue;
+
+    const raw = await fileRes.text();
+    if (!raw.trim()) continue;
+
+    const remaining = MAX_REPO_TOTAL_CHARS - totalChars;
+    const text = trimForBudget(raw, Math.min(remaining, 30_000));
+    totalChars += text.length;
+
+    repoDocs.push({
+      id: `repo:${entry.path}`,
+      label: `repo:${entry.path}`,
+      text
+    });
+  }
+
+  if (!repoDocs.length) {
+    throw new Error('No readable text files found in this repository');
+  }
+
+  return repoDocs;
+}
+
+function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[]): string {
+  const queryTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
+  const chunks: ScoredChunk[] = [];
+
+  for (const doc of documents) {
+    const docBoost = scorePathPriority(doc.label);
+    const docChunks = splitIntoChunks(doc.text);
+
+    for (const chunk of docChunks) {
+      const terms = tokenize(chunk);
+      const frequency = new Map<string, number>();
+      for (const term of terms) {
+        frequency.set(term, (frequency.get(term) ?? 0) + 1);
+      }
+
+      let overlap = 0;
+      for (const q of queryTerms) {
+        overlap += frequency.get(q) ?? 0;
+      }
+
+      const uniqueness = new Set(terms).size;
+      const score = (overlap * 6) + Math.min(uniqueness / 90, 2.5) + docBoost;
+      if (score <= docBoost) continue;
+
+      chunks.push({
+        label: doc.label,
+        score,
+        text: chunk
+      });
+    }
+  }
+
+  const selected = chunks
+    .sort((a, b) => b.score - a.score)
+    .slice(0, config.MAX_RETRIEVED_CHUNKS);
+
+  const sections: string[] = [];
+  let total = 0;
+  for (const chunk of selected) {
+    const block = `Source: ${chunk.label}\n${chunk.text}`;
+    if ((total + block.length) > config.MAX_RETRIEVED_CHARS) break;
+    sections.push(block);
+    total += block.length;
+  }
+
+  return sections.join('\n\n---\n\n');
+}
+
+export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs): Promise<string> {
+  const docs: SourceDocument[] = [];
+  const topicTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
+
+  if (sources.sourceText?.trim()) {
+    docs.push({
+      id: 'text:manual',
+      label: 'Manual source text',
+      text: trimForBudget(sources.sourceText.trim(), MAX_SOURCE_TEXT_CHARS)
+    });
+  }
+
+  if (sources.documents?.length) {
+    for (const file of sources.documents) {
+      if (!file?.buffer?.length) continue;
+      const text = await extractTextFromBuffer(file.originalname, file.mimetype, file.buffer);
+      const normalized = normalizeWhitespace(text);
+      if (!normalized) continue;
+      docs.push({
+        id: `upload:${file.originalname}`,
+        label: `upload:${file.originalname}`,
+        text: trimForBudget(normalized, MAX_SOURCE_TEXT_CHARS)
+      });
+    }
+  }
+
+  if (sources.githubRepoUrl?.trim()) {
+    const repoDocs = await fetchGitHubRepoDocuments(sources.githubRepoUrl.trim(), topicTerms);
+    docs.push(...repoDocs);
+  }
+
+  if (!docs.length) {
+    return '';
+  }
+
+  const context = buildRetrievedContext(topic, settingsSummary, docs);
+  return trimForBudget(context, config.MAX_RETRIEVED_CHARS);
+}
