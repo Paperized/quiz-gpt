@@ -25,7 +25,7 @@ Why this stack: small operational surface, explicit SQL control, and provider ab
 cp .env.example .env
 ```
 
-2. Configure `.env` (`DATABASE_URL` + LLM variables are required).
+2. Configure `.env` (`DATABASE_URL` + LLM variables are required). For local non-Docker DB, change `DATABASE_URL` host from `db` to your local host (e.g. `localhost`).
 3. Install deps:
 
 ```bash
@@ -43,8 +43,27 @@ npm run dev
 
 ## Docker deployment
 
+The compose setup reads variables from `.env` (no hardcoded app secrets in compose files).
+
+1. Copy env:
+
 ```bash
-docker compose up --build
+cp .env.example .env
+```
+
+2. Choose mode:
+
+### Run from GHCR image (default compose)
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### Run from local build (dev compose)
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 App is served at `http://localhost:3000`.
@@ -131,3 +150,4 @@ EMBEDDING_MODEL=voyage-3.5
 
 - If you want LiteLLM, connect it as external endpoint via `LLM_BASE_URL` / `EMBEDDING_BASE_URL`.
 - For very large/private GitHub repos, set `GITHUB_TOKEN`.
+- On every push to `main`, GitHub Actions builds and publishes the app image to `ghcr.io/paperized/quiz-gpt`.
