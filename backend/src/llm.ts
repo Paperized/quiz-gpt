@@ -4,6 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { config } from './config.js';
+import { logger, summarizeText } from './logger.js';
 import type { QuizQuestion, QuizSettings } from './types.js';
 import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
@@ -91,6 +92,19 @@ export async function generateQuizFromLLM(
 
   const retrievedContext = await buildSourceContext(topic, settingsSummary, sources);
   const model = getModel();
+  logger.info('llm.generate_object.requested', {
+    topic: summarizeText(topic),
+    settings,
+    contextUsed: Boolean(retrievedContext),
+    contextChars: retrievedContext.length,
+    provider: {
+      style: config.LLM_API_STYLE,
+      baseUrl: config.LLM_BASE_URL,
+      model: config.LLM_MODEL,
+      maxTokens: config.LLM_MAX_TOKENS,
+      temperature: config.LLM_TEMPERATURE
+    }
+  });
 
   const system = [
     'You are a quiz generator.',
@@ -112,6 +126,7 @@ export async function generateQuizFromLLM(
 
   let generated: z.infer<typeof outputSchema>;
   try {
+    const started = Date.now();
     const { object } = await generateObject({
       model,
       schema: outputSchema,
@@ -121,7 +136,16 @@ export async function generateQuizFromLLM(
       prompt
     });
     generated = outputSchema.parse(object);
+    logger.info('llm.generate_object.completed', {
+      title: generated.title,
+      questions: generated.questions.length,
+      durationMs: Date.now() - started
+    });
   } catch (error) {
+    logger.error('llm.generate_object.failed', error, {
+      providerStyle: config.LLM_API_STYLE,
+      model: config.LLM_MODEL
+    });
     throw new Error(`LLM generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 

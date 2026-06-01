@@ -2,6 +2,7 @@ import mammoth from 'mammoth';
 import pdfParse from '@cedrugs/pdf-parse';
 import { config } from './config.js';
 import { embedTexts, rankByEmbeddingSimilarity } from './embeddings.js';
+import { logger, summarizeText } from './logger.js';
 
 export type SourceInputs = {
   sourceText?: string;
@@ -186,6 +187,13 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
     throw new Error('Unable to detect repository default branch');
   }
 
+  logger.info('github_repo.ingest_started', {
+    owner: parsed.owner,
+    repo: parsed.repo,
+    ref,
+    authenticated: Boolean(config.GITHUB_TOKEN)
+  });
+
   const treeRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, { headers });
   if (!treeRes.ok) {
     throw new Error(`Unable to fetch repository tree (${treeRes.status})`);
@@ -211,6 +219,14 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
       return a.size - b.size;
     })
     .slice(0, MAX_REPO_FILES_TO_FETCH);
+
+  logger.info('github_repo.candidates_selected', {
+    owner: parsed.owner,
+    repo: parsed.repo,
+    ref,
+    treeTruncated: Boolean(treeJson.truncated),
+    candidates: candidates.length
+  });
 
   const repoDocs: SourceDocument[] = [];
   let totalChars = 0;
@@ -244,6 +260,13 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
   if (!repoDocs.length) {
     throw new Error('No readable text files found in this repository');
   }
+
+  logger.info('github_repo.ingest_completed', {
+    owner: parsed.owner,
+    repo: parsed.repo,
+    documents: repoDocs.length,
+    chars: totalChars
+  });
 
   return repoDocs;
 }
@@ -299,9 +322,15 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
       chunk.semanticScore = semantic;
       chunk.score = (semantic * 100) + chunk.lexicalScore;
     });
+    logger.info('retrieval.embedding_ranked', {
+      candidates: preSelected.length,
+      embeddingStyle: config.EMBEDDING_API_STYLE,
+      embeddingModel: config.EMBEDDING_MODEL
+    });
   } catch (error) {
-    // Fallback to lexical ranking if embedding provider is unavailable.
-    console.warn('Embedding retrieval failed, falling back to lexical ranking:', error);
+    logger.warn('retrieval.embedding_failed_fallback_lexical', {
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
   }
 
   const selected = preSelected
@@ -317,18 +346,36 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
     total += block.length;
   }
 
+  logger.info('retrieval.context_selected', {
+    candidates: chunks.length,
+    preSelected: preSelected.length,
+    selected: sections.length,
+    chars: total,
+    maxRetrievedChunks: config.MAX_RETRIEVED_CHUNKS,
+    maxRetrievedChars: config.MAX_RETRIEVED_CHARS
+  });
+
   return sections.join('\n\n---\n\n');
 }
 
 export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs): Promise<string> {
   const docs: SourceDocument[] = [];
   const topicTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
+  logger.info('source_context.build_started', {
+    topic: summarizeText(topic),
+    hasSourceText: Boolean(sources.sourceText?.trim()),
+    hasGithubRepoUrl: Boolean(sources.githubRepoUrl?.trim()),
+    documentCount: sources.documents?.length ?? 0
+  });
 
   if (sources.sourceText?.trim()) {
     docs.push({
       id: 'text:manual',
       label: 'Manual source text',
       text: trimForBudget(sources.sourceText.trim(), MAX_SOURCE_TEXT_CHARS)
+    });
+    logger.info('source_context.manual_text_added', {
+      sourceText: summarizeText(sources.sourceText)
     });
   }
 
@@ -343,6 +390,12 @@ export async function buildSourceContext(topic: string, settingsSummary: string,
         label: `upload:${file.originalname}`,
         text: trimForBudget(normalized, MAX_SOURCE_TEXT_CHARS)
       });
+      logger.info('source_context.document_added', {
+        name: file.originalname,
+        mimeType: file.mimetype,
+        bytes: file.size,
+        extractedChars: normalized.length
+      });
     }
   }
 
@@ -352,9 +405,14 @@ export async function buildSourceContext(topic: string, settingsSummary: string,
   }
 
   if (!docs.length) {
+    logger.info('source_context.empty');
     return '';
   }
 
   const context = await buildRetrievedContext(topic, settingsSummary, docs);
+  logger.info('source_context.build_completed', {
+    documents: docs.length,
+    contextChars: context.length
+  });
   return trimForBudget(context, config.MAX_RETRIEVED_CHARS);
 }

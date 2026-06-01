@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { logger } from './logger.js';
 
 type RuntimeEmbeddingStyle = 'openai' | 'anthropic' | 'openai_compatible';
 
@@ -86,6 +87,13 @@ async function requestEmbeddings(values: string[]): Promise<number[][]> {
   const baseUrl = resolveEmbeddingBaseUrl();
   const apiKey = resolveEmbeddingApiKey();
   const endpoint = buildEndpoint(style, baseUrl);
+  const started = Date.now();
+  logger.info('embeddings.requested', {
+    style,
+    baseUrl,
+    model,
+    inputs: values.length
+  });
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -98,6 +106,12 @@ async function requestEmbeddings(values: string[]): Promise<number[][]> {
 
   if (!response.ok) {
     const payload = await response.text().catch(() => '');
+    logger.warn('embeddings.failed_response', {
+      style,
+      model,
+      status: response.status,
+      message: payload.slice(0, 240)
+    });
     throw new Error(`Embedding request failed (${response.status}). ${payload.slice(0, 400)}`);
   }
 
@@ -107,13 +121,23 @@ async function requestEmbeddings(values: string[]): Promise<number[][]> {
     throw new Error(`Embedding response length mismatch: expected ${values.length}, got ${data.length}`);
   }
 
-  return data.map((item, idx) => {
+  const vectors = data.map((item, idx) => {
     const vector = item.embedding;
     if (!Array.isArray(vector) || !vector.length || !vector.every((n) => Number.isFinite(n))) {
       throw new Error(`Invalid embedding vector for input index ${idx}`);
     }
     return vector;
   });
+
+  logger.info('embeddings.completed', {
+    style,
+    model,
+    inputs: values.length,
+    dimensions: vectors[0]?.length ?? 0,
+    durationMs: Date.now() - started
+  });
+
+  return vectors;
 }
 
 export async function embedTexts(values: string[]): Promise<number[][]> {

@@ -81,12 +81,17 @@ When you pass `sourceText`, uploaded docs, or `githubRepoUrl`, backend does:
 
 This avoids context explosion on big repositories.
 
+## Logging
+
+Server logs are JSON lines controlled by `LOG_LEVEL`. They include startup config (without secrets), generation inputs summarized by size/preview, provider/model settings, retrieval counts, attempts, and clear error messages without stack traces.
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `PORT` | No | `3000` | Backend HTTP port |
 | `PUBLIC_URL` | Yes | `http://localhost:3000` | Public app URL injected via runtime `/config.js` |
+| `LOG_LEVEL` | No | `info` | JSON log level: `debug`, `info`, `warn`, `error` |
 | `BASIC_AUTH_USERNAME` | Recommended for public self-hosting | empty | Enables HTTP Basic Auth when paired with `BASIC_AUTH_PASSWORD` |
 | `BASIC_AUTH_PASSWORD` | Recommended for public self-hosting | empty | Password for HTTP Basic Auth |
 | `RATE_LIMIT_WINDOW_MS` | No | `900000` | Rate limit window for API routes |

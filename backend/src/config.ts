@@ -20,6 +20,7 @@ const configSchema = z.object({
   EMBEDDING_BASE_URL: z.string().optional(),
   EMBEDDING_API_KEY: z.string().optional(),
   EMBEDDING_MODEL: z.string().optional(),
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   BASIC_AUTH_USERNAME: z.string().optional(),
   BASIC_AUTH_PASSWORD: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),

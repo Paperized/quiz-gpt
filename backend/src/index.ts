@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
+import { logger, summarizeText } from './logger.js';
 import { generateQuizFromLLM } from './llm.js';
 import type { QuizQuestion } from './types.js';
 
@@ -170,6 +171,7 @@ app.get('/api/quizzes', asyncRoute(async (_req, res) => {
 }));
 
 app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+  const started = Date.now();
   try {
     let topic: unknown = req.body.topic;
     let settings: unknown = req.body.settings;
@@ -191,12 +193,47 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
       githubRepoUrl: typeof githubRepoUrl === 'string' && githubRepoUrl.trim().length ? githubRepoUrl : undefined
     });
     if (!parsed.success) {
+      logger.warn('quiz_generate.validation_failed', {
+        issues: parsed.error.issues.map((issue) => issue.message),
+        topic: summarizeText(typeof topic === 'string' ? topic : undefined)
+      });
       return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
     }
+
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    logger.info('quiz_generate.requested', {
+      topic: summarizeText(parsed.data.topic),
+      settings: parsed.data.settings,
+      sources: {
+        sourceText: summarizeText(parsed.data.sourceText),
+        githubRepoUrl: parsed.data.githubRepoUrl ? 'provided' : 'none',
+        documents: files.map((file) => ({
+          name: file.originalname,
+          mimeType: file.mimetype,
+          bytes: file.size
+        }))
+      },
+      llm: {
+        style: config.LLM_API_STYLE,
+        baseUrl: config.LLM_BASE_URL,
+        model: config.LLM_MODEL,
+        maxTokens: config.LLM_MAX_TOKENS,
+        temperature: config.LLM_TEMPERATURE
+      },
+      retrieval: {
+        embeddingStyle: config.EMBEDDING_API_STYLE,
+        embeddingBaseUrl: config.EMBEDDING_BASE_URL || config.LLM_BASE_URL,
+        embeddingModel: config.EMBEDDING_MODEL,
+        maxRetrievedChunks: config.MAX_RETRIEVED_CHUNKS,
+        maxRetrievedChars: config.MAX_RETRIEVED_CHARS,
+        maxEmbeddingCandidates: config.MAX_EMBEDDING_CANDIDATES
+      }
+    });
+
     const llm = await generateQuizFromLLM(parsed.data.topic, parsed.data.settings, {
       sourceText: parsed.data.sourceText,
       githubRepoUrl: parsed.data.githubRepoUrl,
-      documents: req.files as Express.Multer.File[] | undefined
+      documents: files
     });
     const id = randomUUID();
     const result = await pool.query(`
@@ -205,6 +242,13 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
       RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at
     `, [id, llm.title, parsed.data.topic, JSON.stringify(parsed.data.settings), JSON.stringify(llm.questions)]);
     const q = result.rows[0];
+    logger.info('quiz_generate.completed', {
+      quizId: q.id,
+      title: q.title,
+      questions: q.questions.length,
+      contextUsed: llm.contextUsed,
+      durationMs: Date.now() - started
+    });
     return res.status(201).json({
       id: q.id,
       title: q.title,
@@ -217,6 +261,9 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
       contextUsed: llm.contextUsed
     });
   } catch (error) {
+    logger.error('quiz_generate.failed', error, {
+      durationMs: Date.now() - started
+    });
     return res.status(422).json({ error: error instanceof Error ? error.message : 'Quiz generation failed' });
   }
 }));
@@ -252,6 +299,13 @@ app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
     return res.status(404).json({ error: 'Quiz not found' });
   }
   const q = rows[0];
+  logger.info('quiz_updated', {
+    quizId: q.id,
+    fields: {
+      title: typeof title !== 'undefined',
+      pinned: typeof pinned !== 'undefined'
+    }
+  });
   return res.json({
     id: q.id,
     title: q.title,
@@ -269,6 +323,7 @@ app.delete('/api/quizzes/:id', asyncRoute(async (req, res) => {
   if (!rowCount) {
     return res.status(404).json({ error: 'Quiz not found' });
   }
+  logger.info('quiz_deleted', { quizId: req.params.id });
   return res.status(204).send();
 }));
 
@@ -294,6 +349,14 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
   const score = questions.reduce((sum, question, index) => (
     sum + (answers[index] === question.correctIndex ? 1 : 0)
   ), 0);
+  logger.info('attempt_submitted', {
+    quizId,
+    score,
+    total,
+    answered: answers.filter((answer) => answer >= 0).length,
+    startedAt,
+    completedAt
+  });
   const id = randomUUID();
   const { rows } = await pool.query(`
     INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at)
@@ -396,23 +459,54 @@ if (existsSync(publicDir)) {
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof multer.MulterError) {
+    logger.warn('request.upload_error', {
+      code: error.code,
+      message: error.message
+    });
     return res.status(400).json({ error: error.message });
   }
   if (error instanceof SyntaxError && 'body' in error) {
+    logger.warn('request.malformed_json');
     return res.status(400).json({ error: 'Malformed JSON request body' });
   }
 
-  console.error('Unhandled request error:', error);
+  logger.error('request.unhandled_error', error);
   return res.status(500).json({ error: 'Internal server error' });
 });
 
 runMigrations()
   .then(() => {
     app.listen(config.PORT, () => {
-      console.log(`Server running on ${config.PORT}`);
+      logger.info('server_started', {
+        port: config.PORT,
+        publicUrl: config.PUBLIC_URL,
+        nodeEnv: process.env.NODE_ENV ?? 'development',
+        basicAuthEnabled: Boolean(config.BASIC_AUTH_USERNAME && config.BASIC_AUTH_PASSWORD),
+        rateLimit: {
+          windowMs: config.RATE_LIMIT_WINDOW_MS,
+          maxRequests: config.RATE_LIMIT_MAX_REQUESTS,
+          generateMaxRequests: config.GENERATE_RATE_LIMIT_MAX_REQUESTS
+        },
+        llm: {
+          style: config.LLM_API_STYLE,
+          baseUrl: config.LLM_BASE_URL,
+          model: config.LLM_MODEL
+        },
+        embeddings: {
+          style: config.EMBEDDING_API_STYLE,
+          baseUrl: config.EMBEDDING_BASE_URL || config.LLM_BASE_URL,
+          model: config.EMBEDDING_MODEL
+        },
+        retrieval: {
+          maxRetrievedChunks: config.MAX_RETRIEVED_CHUNKS,
+          maxRetrievedChars: config.MAX_RETRIEVED_CHARS,
+          maxEmbeddingCandidates: config.MAX_EMBEDDING_CANDIDATES,
+          embeddingBatchSize: config.EMBEDDING_BATCH_SIZE
+        }
+      });
     });
   })
   .catch((error) => {
-    console.error('Failed to start:', error);
+    logger.error('server_start_failed', error);
     process.exit(1);
   });
