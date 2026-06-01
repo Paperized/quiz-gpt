@@ -87,6 +87,11 @@ This avoids context explosion on big repositories.
 |---|---|---|---|
 | `PORT` | No | `3000` | Backend HTTP port |
 | `PUBLIC_URL` | Yes | `http://localhost:3000` | Public app URL injected via runtime `/config.js` |
+| `BASIC_AUTH_USERNAME` | Recommended for public self-hosting | empty | Enables HTTP Basic Auth when paired with `BASIC_AUTH_PASSWORD` |
+| `BASIC_AUTH_PASSWORD` | Recommended for public self-hosting | empty | Password for HTTP Basic Auth |
+| `RATE_LIMIT_WINDOW_MS` | No | `900000` | Rate limit window for API routes |
+| `RATE_LIMIT_MAX_REQUESTS` | No | `300` | Max API requests per window |
+| `GENERATE_RATE_LIMIT_MAX_REQUESTS` | No | `20` | Max quiz generation requests per window |
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
 | `LLM_API_STYLE` | No | `openai` | `openai`, `anthropic`, `openai_compatible` |
 | `LLM_BASE_URL` | Yes | `https://api.openai.com/v1` | LLM provider base URL |
@@ -150,4 +155,5 @@ EMBEDDING_MODEL=voyage-3.5
 
 - If you want LiteLLM, connect it as external endpoint via `LLM_BASE_URL` / `EMBEDDING_BASE_URL`.
 - For very large/private GitHub repos, set `GITHUB_TOKEN`.
+- If the app is reachable from the public internet, set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` or put it behind an authenticated reverse proxy.
 - On every push to `main`, GitHub Actions builds and publishes the app image to `ghcr.io/paperized/quiz-gpt`.

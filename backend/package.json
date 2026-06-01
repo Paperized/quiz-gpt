@@ -9,12 +9,14 @@
     "lint": "echo 'No linter configured for backend'"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.17",
-    "@ai-sdk/openai": "^2.0.24",
-    "@ai-sdk/openai-compatible": "^1.0.12",
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/openai-compatible": "^2.0.48",
     "@cedrugs/pdf-parse": "^1.0.0",
-    "ai": "^5.0.53",
+    "ai": "^6.0.194",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
     "mammoth": "^1.10.0",
     "multer": "^2.0.2",
     "pg": "^8.12.0",

@@ -19,7 +19,12 @@ const configSchema = z.object({
   EMBEDDING_API_STYLE: z.enum(['same_as_llm', 'openai', 'anthropic', 'openai_compatible']).default('same_as_llm'),
   EMBEDDING_BASE_URL: z.string().optional(),
   EMBEDDING_API_KEY: z.string().optional(),
-  EMBEDDING_MODEL: z.string().optional()
+  EMBEDDING_MODEL: z.string().optional(),
+  BASIC_AUTH_USERNAME: z.string().optional(),
+  BASIC_AUTH_PASSWORD: z.string().optional(),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(300),
+  GENERATE_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(20)
 });
 
 export const config = configSchema.parse(process.env);

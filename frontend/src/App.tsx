@@ -171,6 +171,7 @@ export function App() {
   useEffect(() => {
     setAnswers({});
     setSubmitted(false);
+    setError(null);
     setStartedAt(selectedQuiz ? new Date().toISOString() : null);
     setSingleIndex(0);
   }, [selectedId]);
@@ -260,21 +261,21 @@ export function App() {
 
   async function submitQuiz() {
     if (!selectedQuiz || !startedAt) return;
-    const total = selectedQuiz.questions.length;
-    const score = selectedQuiz.questions.reduce((acc, q, i) => acc + ((answers[i] ?? -1) === q.correctIndex ? 1 : 0), 0);
-    setSubmitted(true);
-    await req('/api/attempts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        quizId: selectedQuiz.id,
-        answers: selectedQuiz.questions.map((_, i) => answers[i] ?? -1),
-        score,
-        total,
-        startedAt,
-        completedAt: new Date().toISOString()
-      })
-    });
+    try {
+      await req('/api/attempts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quizId: selectedQuiz.id,
+          answers: selectedQuiz.questions.map((_, i) => answers[i] ?? -1),
+          startedAt,
+          completedAt: new Date().toISOString()
+        })
+      });
+      setSubmitted(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to submit attempt');
+    }
   }
 
   function retake() {
@@ -368,6 +369,7 @@ export function App() {
             <h2>{selectedQuiz.title}</h2>
             <p>{selectedQuiz.topic}</p>
             {selectedQuiz.contextUsed && <small>Generated with retrieved source context</small>}
+            {error && <p className="error">{error}</p>}
             <div className="row">
               <label>View
                 <select value={viewMode} onChange={(e) => setViewMode(e.target.value as 'all' | 'one')}>
