@@ -15,7 +15,7 @@ const outputSchema = z.object({
     question: z.string().min(5),
     choices: z.array(z.string().min(1)).min(2),
     correctIndex: z.number().int().nonnegative(),
-    explanation: z.string().optional()
+    explanation: z.string()
   })).min(1)
 });
 
@@ -130,7 +130,6 @@ export async function generateQuizFromLLM(
     const { object } = await generateObject({
       model,
       schema: outputSchema,
-      temperature: config.LLM_TEMPERATURE,
       maxOutputTokens: config.LLM_MAX_TOKENS,
       system,
       prompt

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
@@ -448,7 +449,7 @@ app.get('/api/results/metrics', asyncRoute(async (_req, res) => {
   });
 }));
 
-const publicDir = join(process.cwd(), 'backend/public');
+const publicDir = join(fileURLToPath(new URL('.', import.meta.url)), '../public');
 if (existsSync(publicDir)) {
   app.use(express.static(publicDir));
   app.get('*', (req, res, next) => {
