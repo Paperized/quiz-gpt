@@ -56,7 +56,8 @@ const defaultSettings: QuizSettings = {
   questionType: 'mixed'
 };
 
-const apiBase = (window.__APP_CONFIG__?.publicUrl ?? window.location.origin).replace(/\/$/, '');
+const runtimePublicUrl = window.__APP_CONFIG__?.publicUrl?.trim();
+const apiBase = runtimePublicUrl ? runtimePublicUrl.replace(/\/$/, '') : '';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBase}${path}`, init);
@@ -95,7 +96,9 @@ export function App() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [historyFilter, setHistoryFilter] = useState({ quizName: '', from: '', to: '' });
   const [resultsTab, setResultsTab] = useState<'history' | 'metrics'>('history');
+  const [resultsError, setResultsError] = useState<string | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [trendQuizId, setTrendQuizId] = useState('');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('theme');
     if (saved === 'light' || saved === 'dark') return saved;
@@ -121,17 +124,22 @@ export function App() {
   }
 
   async function loadResults() {
+    setResultsError(null);
     const params = new URLSearchParams();
     if (historyFilter.quizName) params.set('quizName', historyFilter.quizName);
     if (historyFilter.from) params.set('from', historyFilter.from);
     if (historyFilter.to) params.set('to', historyFilter.to);
 
-    const [h, m] = await Promise.all([
-      req<AttemptHistory[]>(`/api/results/history?${params.toString()}`),
-      req<Metrics>('/api/results/metrics')
-    ]);
-    setHistory(h);
-    setMetrics(m);
+    try {
+      const [h, m] = await Promise.all([
+        req<AttemptHistory[]>(`/api/results/history?${params.toString()}`),
+        req<Metrics>('/api/results/metrics')
+      ]);
+      setHistory(h);
+      setMetrics(m);
+    } catch (e) {
+      setResultsError(e instanceof Error ? e.message : 'Failed to load results');
+    }
   }
 
   useEffect(() => {
@@ -145,6 +153,18 @@ export function App() {
   }, [activeSection]);
 
   useEffect(() => {
+    if (!metrics) return;
+    const ids = Object.keys(metrics.trendByQuiz);
+    if (!ids.length) {
+      setTrendQuizId('');
+      return;
+    }
+    if (!ids.includes(trendQuizId)) {
+      setTrendQuizId(ids[0]);
+    }
+  }, [metrics, trendQuizId]);
+
+  useEffect(() => {
     setAnswers({});
     setSubmitted(false);
     setStartedAt(selectedQuiz ? new Date().toISOString() : null);
@@ -152,6 +172,14 @@ export function App() {
   }, [selectedId]);
 
   async function generateQuiz() {
+    if (settings.minQuestions > settings.maxQuestions) {
+      setError('Min questions cannot be greater than max questions');
+      return;
+    }
+    if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) {
+      setError('True/False mode requires exactly 2 choices per question');
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -271,6 +299,7 @@ export function App() {
           ))}
         </div>
       </aside>
+      {mobileSidebarOpen && <button className="backdrop" onClick={() => setMobileSidebarOpen(false)} aria-label="Close sidebar" />}
 
       <main className="main">
         <div className="topbar">
@@ -369,6 +398,7 @@ export function App() {
               <button className={resultsTab === 'history' ? 'active' : ''} onClick={() => setResultsTab('history')}>History</button>
               <button className={resultsTab === 'metrics' ? 'active' : ''} onClick={() => setResultsTab('metrics')}>Metrics</button>
             </div>
+            {resultsError && <p className="error">{resultsError}</p>}
 
             {resultsTab === 'history' && (
               <>
@@ -400,19 +430,29 @@ export function App() {
                 <h3>Best score per quiz</h3>
                 {metrics.bestScorePerQuiz.map((b) => <div key={b.quizId} className="history-item"><span>{b.quizTitle}</span><strong>{b.bestScore.toFixed(1)}%</strong></div>)}
                 <h3>Improvement trend</h3>
-                {Object.entries(metrics.trendByQuiz).map(([quizId, trend]) => (
-                  <div key={quizId} className="trend">
-                    <strong>{trend.quizTitle}</strong>
+                {Object.keys(metrics.trendByQuiz).length > 0 && (
+                  <label>
+                    Quiz
+                    <select value={trendQuizId} onChange={(e) => setTrendQuizId(e.target.value)}>
+                      {Object.entries(metrics.trendByQuiz).map(([quizId, trend]) => (
+                        <option key={quizId} value={quizId}>{trend.quizTitle}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {trendQuizId && metrics.trendByQuiz[trendQuizId] && (
+                  <div className="trend">
+                    <strong>{metrics.trendByQuiz[trendQuizId].quizTitle}</strong>
                     <svg viewBox="0 0 240 80" preserveAspectRatio="none">
                       <polyline
                         fill="none"
                         stroke="currentColor"
                         strokeWidth="2"
-                        points={trend.points.map((p, i) => `${(i / Math.max(trend.points.length - 1, 1)) * 240},${80 - (p.scorePercent / 100) * 80}`).join(' ')}
+                        points={metrics.trendByQuiz[trendQuizId].points.map((p, i, arr) => `${(i / Math.max(arr.length - 1, 1)) * 240},${80 - (p.scorePercent / 100) * 80}`).join(' ')}
                       />
                     </svg>
                   </div>
-                ))}
+                )}
               </>
             )}
           </section>

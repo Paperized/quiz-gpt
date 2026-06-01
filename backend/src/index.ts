@@ -2,28 +2,67 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
 import { generateQuizFromLLM } from './llm.js';
-import type { QuizSettings } from './types.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-const settingsSchema = {
-  minQuestions: 'number',
-  maxQuestions: 'number',
-  choicesPerQuestion: 'number',
-  difficulty: 'string',
-  language: 'string',
-  questionType: 'string'
-};
+const quizSettingsSchema = z.object({
+  minQuestions: z.number().int().min(1).max(100),
+  maxQuestions: z.number().int().min(1).max(100),
+  choicesPerQuestion: z.number().int().min(2).max(6),
+  difficulty: z.enum(['Easy', 'Medium', 'Hard']),
+  language: z.string().trim().min(2),
+  questionType: z.enum(['multiple_choice', 'true_false', 'mixed'])
+}).superRefine((settings, ctx) => {
+  if (settings.minQuestions > settings.maxQuestions) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'minQuestions cannot be greater than maxQuestions'
+    });
+  }
+  if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'true_false quizzes require choicesPerQuestion = 2'
+    });
+  }
+});
 
-function isValidSettings(input: unknown): input is QuizSettings {
-  if (!input || typeof input !== 'object') return false;
-  const data = input as Record<string, unknown>;
-  return Object.entries(settingsSchema).every(([k, t]) => typeof data[k] === t);
-}
+const generateQuizSchema = z.object({
+  topic: z.string().trim().min(3),
+  settings: quizSettingsSchema
+});
+
+const updateQuizSchema = z.object({
+  title: z.string().trim().min(1).optional(),
+  pinned: z.boolean().optional()
+});
+
+const createAttemptSchema = z.object({
+  quizId: z.string().uuid(),
+  answers: z.array(z.number().int()),
+  score: z.number().int().min(0),
+  total: z.number().int().min(1),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime()
+}).superRefine((attempt, ctx) => {
+  if (attempt.score > attempt.total) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'score cannot be greater than total'
+    });
+  }
+  if (attempt.answers.length !== attempt.total) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'answers length must match total'
+    });
+  }
+});
 
 app.get('/config.js', (_req, res) => {
   res.type('application/javascript').send(`window.__APP_CONFIG__ = ${JSON.stringify({ publicUrl: config.PUBLIC_URL })};`);
@@ -53,10 +92,11 @@ app.get('/api/quizzes', async (_req, res) => {
 
 app.post('/api/quizzes/generate', async (req, res) => {
   try {
-    const { topic, settings } = req.body as { topic?: string; settings?: unknown; };
-    if (!topic || !isValidSettings(settings)) {
-      return res.status(400).json({ error: 'Invalid payload' });
+    const parsed = generateQuizSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
     }
+    const { topic, settings } = parsed.data;
     const llm = await generateQuizFromLLM(topic, settings);
     const id = randomUUID();
     const result = await pool.query(`
@@ -82,7 +122,11 @@ app.post('/api/quizzes/generate', async (req, res) => {
 
 app.patch('/api/quizzes/:id', async (req, res) => {
   const { id } = req.params;
-  const { title, pinned } = req.body as { title?: string; pinned?: boolean; };
+  const parsed = updateQuizSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
+  }
+  const { title, pinned } = parsed.data;
   if (typeof title === 'undefined' && typeof pinned === 'undefined') {
     return res.status(400).json({ error: 'No updates requested' });
   }
@@ -128,17 +172,11 @@ app.delete('/api/quizzes/:id', async (req, res) => {
 });
 
 app.post('/api/attempts', async (req, res) => {
-  const { quizId, answers, score, total, startedAt, completedAt } = req.body as {
-    quizId?: string;
-    answers?: number[];
-    score?: number;
-    total?: number;
-    startedAt?: string;
-    completedAt?: string;
-  };
-  if (!quizId || !Array.isArray(answers) || typeof score !== 'number' || typeof total !== 'number' || !startedAt || !completedAt) {
-    return res.status(400).json({ error: 'Invalid attempt payload' });
+  const parsed = createAttemptSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
   }
+  const { quizId, answers, score, total, startedAt, completedAt } = parsed.data;
   const id = randomUUID();
   const { rows } = await pool.query(`
     INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at)
@@ -161,6 +199,8 @@ app.get('/api/results/history', async (req, res) => {
   const quizName = (req.query.quizName as string | undefined)?.toLowerCase();
   const from = req.query.from as string | undefined;
   const to = req.query.to as string | undefined;
+  const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : null;
+  const toDate = to ? new Date(`${to}T23:59:59.999Z`) : null;
 
   const { rows } = await pool.query(`
     SELECT a.id, a.quiz_id, a.score, a.total, a.started_at, a.completed_at, q.title
@@ -171,8 +211,8 @@ app.get('/api/results/history', async (req, res) => {
 
   const filtered = rows.filter((r) => {
     if (quizName && !r.title.toLowerCase().includes(quizName)) return false;
-    if (from && new Date(r.completed_at) < new Date(from)) return false;
-    if (to && new Date(r.completed_at) > new Date(to)) return false;
+    if (fromDate && new Date(r.completed_at) < fromDate) return false;
+    if (toDate && new Date(r.completed_at) > toDate) return false;
     return true;
   });
 

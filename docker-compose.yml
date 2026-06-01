@@ -7,11 +7,13 @@ services:
       PORT: 3000
       PUBLIC_URL: http://localhost:3000
       DATABASE_URL: postgresql://learngpt:learngpt@db:5432/learngpt
+      LLM_API_STYLE: openai
       LLM_BASE_URL: https://api.openai.com/v1
       LLM_API_KEY: ""
       LLM_MODEL: gpt-4o
       LLM_MAX_TOKENS: 2000
       LLM_TEMPERATURE: 0.7
+      ANTHROPIC_VERSION: 2023-06-01
     depends_on:
       db:
         condition: service_healthy
