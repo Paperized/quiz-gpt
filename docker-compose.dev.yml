@@ -33,22 +33,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: traefik-public
-      traefik.http.routers.quiz.rule: Host(`quiz.pape-sh.cc`)
-      traefik.http.routers.quiz.entrypoints: websecure
-      traefik.http.services.quiz.loadbalancer.server.port: "3000"
-      homepage.instance: local
-      homepage.group: Tools
-      homepage.name: Quiz GPT
-      homepage.href: https://quiz.pape-sh.cc
-      homepage.icon: mdi-school
-      homepage.description: Generatore di quiz AI con LLM
-    networks:
-      - default
-      - traefik-public
-      - llm-net
 
   db:
     image: postgres:16-alpine
@@ -66,11 +50,3 @@ services:
 
 volumes:
   pgdata:
-
-networks:
-  default: {}
-  traefik-public:
-    external: true
-  llm-net:
-    external: true
-    name: llm-net
