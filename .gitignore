@@ -8,5 +8,6 @@ backend/node_modules
 frontend/dist
 backend/dist
 .env
+docker-compose.dev.yml
 *.log
 .DS_Store
