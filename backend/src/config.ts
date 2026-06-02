@@ -31,4 +31,9 @@ export const configSchema = z.object({
   SETTINGS_ENCRYPTION_KEY: z.string().optional()
 });
 
-export const config = configSchema.parse(process.env);
+// Strip empty strings so Zod .default() kicks in instead of failing validation
+const env = Object.fromEntries(
+  Object.entries(process.env).map(([k, v]) => [k, v === '' ? undefined : v])
+);
+
+export const config = configSchema.parse(env);
