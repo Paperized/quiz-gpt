@@ -12,7 +12,7 @@ import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
 import { generateQuizFromLLM } from './llm.js';
-import { getSettingsForDisplay, saveSettings, settingsSaveSchema } from './settings.js';
+import { getSettingsForDisplay, initializeSettings, saveSettings, settingsSaveSchema } from './settings.js';
 import type { QuizQuestion } from './types.js';
 
 const app = express();
@@ -529,6 +529,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 runMigrations()
+  .then(() => initializeSettings())
   .then(() => {
     app.listen(config.PORT, () => {
       logger.info('server_started', {

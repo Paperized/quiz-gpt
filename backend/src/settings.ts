@@ -54,32 +54,85 @@ export function maskSecret(value: string): string {
 export type EffectiveSettings = z.infer<typeof configSchema>;
 
 /**
- * Returns merged config: DB settings override env defaults.
- * Secrets are decrypted if SETTINGS_ENCRYPTION_KEY is set.
+ * Returns effective settings, reading exclusively from DB.
+ * DB is always seeded on startup via initializeSettings(), so env is not consulted here.
+ * Infrastructure-only keys (DATABASE_URL, PORT, etc.) are still read from env via `config`.
  */
 export async function getEffectiveSettings(): Promise<EffectiveSettings> {
   const { rows } = await pool.query('SELECT key, value FROM app_settings');
-  const dbOverrides: Record<string, string> = {};
+  const dbValues: Record<string, string> = {};
   const encKey = config.SETTINGS_ENCRYPTION_KEY;
 
   for (const { key, value } of rows as { key: string; value: string }[]) {
     if (!value) continue;
     if (isEncrypted(value)) {
-      if (!encKey) continue; // can't decrypt without key
+      if (!encKey) continue;
       try {
-        dbOverrides[key] = decryptValue(value, encKey);
+        dbValues[key] = decryptValue(value, encKey);
       } catch {
-        continue; // corrupt or wrong key — skip
+        continue;
       }
     } else {
-      dbOverrides[key] = value;
+      dbValues[key] = value;
     }
   }
 
+  // Infrastructure keys (DATABASE_URL, PORT, etc.) come from env; managed keys come from DB.
   const merged = Object.fromEntries(
-    Object.entries({ ...process.env, ...dbOverrides }).map(([k, v]) => [k, v === '' ? undefined : v])
+    Object.entries({ ...process.env, ...dbValues }).map(([k, v]) => [k, v === '' ? undefined : v])
   );
   return configSchema.parse(merged);
+}
+
+// All keys managed via the Settings UI (subset of full config — excludes infra like DATABASE_URL)
+const MANAGED_KEYS: (keyof SettingsSaveInput)[] = [
+  'LLM_API_STYLE', 'LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL',
+  'LLM_MAX_TOKENS', 'LLM_TEMPERATURE',
+  'EMBEDDING_API_STYLE', 'EMBEDDING_BASE_URL', 'EMBEDDING_API_KEY', 'EMBEDDING_MODEL',
+  'MAX_EMBEDDING_CANDIDATES', 'EMBEDDING_BATCH_SIZE',
+  'MAX_RETRIEVED_CHUNKS', 'MAX_RETRIEVED_CHARS',
+  'RATE_LIMIT_MAX_REQUESTS', 'GENERATE_RATE_LIMIT_MAX_REQUESTS',
+];
+
+/**
+ * On fresh start: seeds app_settings with env/default values for any key not yet in DB.
+ * After this, getEffectiveSettings() reads exclusively from DB.
+ */
+export async function initializeSettings(): Promise<void> {
+  const { rows } = await pool.query('SELECT key FROM app_settings');
+  const existingKeys = new Set(rows.map((r: { key: string }) => r.key));
+  const keyToUse = config.SETTINGS_ENCRYPTION_KEY;
+
+  const toInsert: Record<string, string> = {};
+  for (const key of MANAGED_KEYS) {
+    if (existingKeys.has(key)) continue;
+    const raw = (config as Record<string, unknown>)[key];
+    if (raw === undefined || raw === null) continue;
+    let value = String(raw);
+    if (SECRET_FIELDS.includes(key as (typeof SECRET_FIELDS)[number]) && value && keyToUse) {
+      value = encryptValue(value, keyToUse);
+    }
+    toInsert[key] = value;
+  }
+
+  if (!Object.keys(toInsert).length) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [key, value] of Object.entries(toInsert)) {
+      await client.query(
+        `INSERT INTO app_settings(key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
+        [key, value]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 const settingsSaveSchema = z.object({
