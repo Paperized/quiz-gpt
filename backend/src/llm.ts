@@ -3,11 +3,12 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
-import { config } from './config.js';
 import { logger, summarizeText } from './logger.js';
 import type { QuizQuestion, QuizSettings } from './types.js';
 import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
+import { getEffectiveSettings } from './settings.js';
+import type { EffectiveSettings } from './settings.js';
 
 const outputSchema = z.object({
   title: z.string().min(3),
@@ -19,36 +20,36 @@ const outputSchema = z.object({
   })).min(1)
 });
 
-function getModel() {
-  if (!config.LLM_API_KEY) {
+function getModel(cfg: EffectiveSettings) {
+  if (!cfg.LLM_API_KEY) {
     throw new Error('LLM_API_KEY is empty. Set it to generate quizzes.');
   }
 
-  if (config.LLM_API_STYLE === 'anthropic') {
+  if (cfg.LLM_API_STYLE === 'anthropic') {
     const anthropic = createAnthropic({
-      apiKey: config.LLM_API_KEY,
-      baseURL: config.LLM_BASE_URL,
+      apiKey: cfg.LLM_API_KEY,
+      baseURL: cfg.LLM_BASE_URL,
       headers: {
-        'anthropic-version': config.ANTHROPIC_VERSION
+        'anthropic-version': cfg.ANTHROPIC_VERSION
       }
     });
-    return anthropic(config.LLM_MODEL);
+    return anthropic(cfg.LLM_MODEL);
   }
 
-  if (config.LLM_API_STYLE === 'openai_compatible') {
+  if (cfg.LLM_API_STYLE === 'openai_compatible') {
     const provider = createOpenAICompatible({
       name: 'compatible',
-      apiKey: config.LLM_API_KEY,
-      baseURL: config.LLM_BASE_URL
+      apiKey: cfg.LLM_API_KEY,
+      baseURL: cfg.LLM_BASE_URL
     });
-    return provider(config.LLM_MODEL);
+    return provider(cfg.LLM_MODEL);
   }
 
   const openai = createOpenAI({
-    apiKey: config.LLM_API_KEY,
-    baseURL: config.LLM_BASE_URL
+    apiKey: cfg.LLM_API_KEY,
+    baseURL: cfg.LLM_BASE_URL
   });
-  return openai(config.LLM_MODEL);
+  return openai(cfg.LLM_MODEL);
 }
 
 function sanitizeQuestions(
@@ -81,6 +82,8 @@ export async function generateQuizFromLLM(
   settings: QuizSettings,
   sources: SourceInputs
 ): Promise<{ title: string; questions: QuizQuestion[]; contextUsed: boolean; }> {
+  const cfg = await getEffectiveSettings();
+
   const settingsSummary = [
     `minQuestions=${settings.minQuestions}`,
     `maxQuestions=${settings.maxQuestions}`,
@@ -90,19 +93,19 @@ export async function generateQuizFromLLM(
     `questionType=${settings.questionType}`
   ].join('; ');
 
-  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources);
-  const model = getModel();
+  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, cfg);
+  const model = getModel(cfg);
   logger.info('llm.generate_object.requested', {
     topic: summarizeText(topic),
     settings,
     contextUsed: Boolean(retrievedContext),
     contextChars: retrievedContext.length,
     provider: {
-      style: config.LLM_API_STYLE,
-      baseUrl: config.LLM_BASE_URL,
-      model: config.LLM_MODEL,
-      maxTokens: config.LLM_MAX_TOKENS,
-      temperature: config.LLM_TEMPERATURE
+      style: cfg.LLM_API_STYLE,
+      baseUrl: cfg.LLM_BASE_URL,
+      model: cfg.LLM_MODEL,
+      maxTokens: cfg.LLM_MAX_TOKENS,
+      temperature: cfg.LLM_TEMPERATURE
     }
   });
 
@@ -130,7 +133,7 @@ export async function generateQuizFromLLM(
     const { object } = await generateObject({
       model,
       schema: outputSchema,
-      maxOutputTokens: config.LLM_MAX_TOKENS,
+      maxOutputTokens: cfg.LLM_MAX_TOKENS,
       system,
       prompt
     });
@@ -142,8 +145,8 @@ export async function generateQuizFromLLM(
     });
   } catch (error) {
     logger.error('llm.generate_object.failed', error, {
-      providerStyle: config.LLM_API_STYLE,
-      model: config.LLM_MODEL
+      providerStyle: cfg.LLM_API_STYLE,
+      model: cfg.LLM_MODEL
     });
     throw new Error(`LLM generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }

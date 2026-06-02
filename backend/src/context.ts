@@ -3,6 +3,7 @@ import pdfParse from '@cedrugs/pdf-parse';
 import { config } from './config.js';
 import { embedTexts, rankByEmbeddingSimilarity } from './embeddings.js';
 import { logger, summarizeText } from './logger.js';
+import type { EffectiveSettings } from './settings.js';
 
 export type SourceInputs = {
   sourceText?: string;
@@ -271,7 +272,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
   return repoDocs;
 }
 
-async function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[]): Promise<string> {
+async function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[], cfg: EffectiveSettings): Promise<string> {
   const queryTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
   const chunks: ScoredChunk[] = [];
 
@@ -306,7 +307,7 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
 
   const preSelected = chunks
     .sort((a, b) => b.score - a.score)
-    .slice(0, config.MAX_EMBEDDING_CANDIDATES);
+    .slice(0, cfg.MAX_EMBEDDING_CANDIDATES);
 
   if (!preSelected.length) return '';
 
@@ -324,8 +325,8 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
     });
     logger.info('retrieval.embedding_ranked', {
       candidates: preSelected.length,
-      embeddingStyle: config.EMBEDDING_API_STYLE,
-      embeddingModel: config.EMBEDDING_MODEL
+      embeddingStyle: cfg.EMBEDDING_API_STYLE,
+      embeddingModel: cfg.EMBEDDING_MODEL
     });
   } catch (error) {
     logger.warn('retrieval.embedding_failed_fallback_lexical', {
@@ -335,13 +336,13 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
 
   const selected = preSelected
     .sort((a, b) => b.score - a.score)
-    .slice(0, config.MAX_RETRIEVED_CHUNKS);
+    .slice(0, cfg.MAX_RETRIEVED_CHUNKS);
 
   const sections: string[] = [];
   let total = 0;
   for (const chunk of selected) {
     const block = `Source: ${chunk.label}\n${chunk.text}`;
-    if ((total + block.length) > config.MAX_RETRIEVED_CHARS) break;
+    if ((total + block.length) > cfg.MAX_RETRIEVED_CHARS) break;
     sections.push(block);
     total += block.length;
   }
@@ -351,14 +352,14 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
     preSelected: preSelected.length,
     selected: sections.length,
     chars: total,
-    maxRetrievedChunks: config.MAX_RETRIEVED_CHUNKS,
-    maxRetrievedChars: config.MAX_RETRIEVED_CHARS
+    maxRetrievedChunks: cfg.MAX_RETRIEVED_CHUNKS,
+    maxRetrievedChars: cfg.MAX_RETRIEVED_CHARS
   });
 
   return sections.join('\n\n---\n\n');
 }
 
-export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs): Promise<string> {
+export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs, cfg: EffectiveSettings): Promise<string> {
   const docs: SourceDocument[] = [];
   const topicTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
   logger.info('source_context.build_started', {
@@ -409,10 +410,10 @@ export async function buildSourceContext(topic: string, settingsSummary: string,
     return '';
   }
 
-  const context = await buildRetrievedContext(topic, settingsSummary, docs);
+  const context = await buildRetrievedContext(topic, settingsSummary, docs, cfg);
   logger.info('source_context.build_completed', {
     documents: docs.length,
     contextChars: context.length
   });
-  return trimForBudget(context, config.MAX_RETRIEVED_CHARS);
+  return trimForBudget(context, cfg.MAX_RETRIEVED_CHARS);
 }

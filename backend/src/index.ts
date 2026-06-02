@@ -12,6 +12,7 @@ import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
 import { generateQuizFromLLM } from './llm.js';
+import { getSettingsForDisplay, saveSettings, settingsSaveSchema } from './settings.js';
 import type { QuizQuestion } from './types.js';
 
 const app = express();
@@ -377,6 +378,37 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
   });
 }));
 
+app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
+  const { id } = req.params;
+  const { rows } = await pool.query(`
+    SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at,
+           q.title, q.topic, q.settings, q.questions, q.pinned
+    FROM attempts a
+    JOIN quizzes q ON q.id = a.quiz_id
+    WHERE a.id = $1
+  `, [id]);
+  if (!rows.length) return res.status(404).json({ error: 'Attempt not found' });
+  const r = rows[0];
+  return res.json({
+    id: r.id,
+    quizId: r.quiz_id,
+    answers: r.answers,
+    score: r.score,
+    total: r.total,
+    startedAt: r.started_at,
+    completedAt: r.completed_at,
+    timeTakenSeconds: Math.max(0, Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)),
+    quiz: {
+      id: r.quiz_id,
+      title: r.title,
+      topic: r.topic,
+      settings: r.settings,
+      questions: r.questions,
+      pinned: r.pinned,
+    }
+  });
+}));
+
 app.get('/api/results/history', asyncRoute(async (req, res) => {
   const quizName = (req.query.quizName as string | undefined)?.toLowerCase();
   const from = req.query.from as string | undefined;
@@ -448,6 +480,33 @@ app.get('/api/results/metrics', asyncRoute(async (_req, res) => {
     mostAttemptedQuiz: mostAttempted ? { quizId: mostAttempted[0], quizTitle: quizMap.get(mostAttempted[0]) ?? 'Unknown Quiz', attempts: mostAttempted[1] } : null,
     trendByQuiz: Object.fromEntries(Array.from(trendByQuiz.entries()).map(([quizId, trend]) => [quizId, { quizTitle: quizMap.get(quizId) ?? 'Unknown Quiz', points: trend }]))
   });
+}));
+
+app.get('/api/settings', asyncRoute(async (_req, res) => {
+  const display = await getSettingsForDisplay();
+  return res.json(display);
+}));
+
+const settingsUpdateRequestSchema = settingsSaveSchema.extend({
+  encryptionKey: z.string().optional()
+});
+
+app.put('/api/settings', asyncRoute(async (req, res) => {
+  const parsed = settingsUpdateRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+  }
+  const { encryptionKey, ...settingsInput } = parsed.data;
+  try {
+    await saveSettings(settingsInput, encryptionKey);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to save settings';
+    if (msg.includes('Encryption key')) return res.status(403).json({ error: msg });
+    throw err;
+  }
+  logger.info('settings_saved', { keys: Object.keys(settingsInput) });
+  const display = await getSettingsForDisplay();
+  return res.json(display);
 }));
 
 const publicDir = join(fileURLToPath(new URL('.', import.meta.url)), '../public');

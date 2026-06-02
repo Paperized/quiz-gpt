@@ -51,6 +51,18 @@ type Metrics = {
   trendByQuiz: Record<string, { quizTitle: string; points: Array<{ completedAt: string; scorePercent: number }> }>;
 };
 
+type AttemptReview = {
+  id: string;
+  quizId: string;
+  answers: number[];
+  score: number;
+  total: number;
+  startedAt: string;
+  completedAt: string;
+  timeTakenSeconds: number;
+  quiz: Quiz;
+};
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 
 const runtimePublicUrl = window.__APP_CONFIG__?.publicUrl?.trim();
@@ -207,9 +219,14 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
                       <Icon name="push_pin" size={16} className="text-secondary shrink-0" />
                       <span className="text-[12px] truncate">{quiz.title}</span>
                     </div>
-                    <button onClick={(e) => void deleteQuiz(quiz, e)} className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-error transition-opacity shrink-0">
-                      <Icon name="delete" size={14} />
-                    </button>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <button onClick={(e) => void togglePin(quiz, e)} className="text-text-muted hover:text-secondary p-0.5">
+                        <Icon name="push_pin" size={14} fill />
+                      </button>
+                      <button onClick={(e) => void deleteQuiz(quiz, e)} className="text-text-muted hover:text-error p-0.5">
+                        <Icon name="delete" size={14} />
+                      </button>
+                    </div>
                   </button>
                 </li>
               ))}
@@ -231,9 +248,14 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
                     <Icon name="history" size={16} className="shrink-0" />
                     <span className="text-[12px] truncate">{quiz.title}</span>
                   </div>
-                  <button onClick={(e) => void togglePin(quiz, e)} className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-secondary transition-opacity shrink-0">
-                    <Icon name="push_pin" size={14} />
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <button onClick={(e) => void togglePin(quiz, e)} className="text-text-muted hover:text-secondary p-0.5">
+                      <Icon name="push_pin" size={14} />
+                    </button>
+                    <button onClick={(e) => void deleteQuiz(quiz, e)} className="text-text-muted hover:text-error p-0.5">
+                      <Icon name="delete" size={14} />
+                    </button>
+                  </div>
                 </button>
               </li>
             ))}
@@ -242,10 +264,13 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
 
         {/* Footer */}
         <div className="border-t border-border-subtle px-2 py-4 space-y-1">
-          <a href="#" className="flex items-center gap-3 text-text-muted hover:text-on-surface px-4 py-2 rounded hover:bg-surface-variant transition-colors">
-            <Icon name="settings" size={18} />
+          <button
+            onClick={() => { navigate('/settings'); onClose(); }}
+            className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${location.pathname === '/settings' ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+          >
+            <Icon name="settings" size={18} className={location.pathname === '/settings' ? 'text-secondary' : ''} />
             <span className="text-[12px]">Settings</span>
-          </a>
+          </button>
           <a href="#" className="flex items-center gap-3 text-text-muted hover:text-on-surface px-4 py-2 rounded hover:bg-surface-variant transition-colors">
             <Icon name="help" size={18} />
             <span className="text-[12px]">Help</span>
@@ -357,14 +382,14 @@ function CreateQuizPage() {
               </div>
               <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="border border-border-subtle rounded-lg p-3 hover:border-outline-variant transition-colors">
-                  <div className="flex items-start gap-3">
+                  <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded bg-surface-bright flex items-center justify-center shrink-0">
                       <Icon name="link" size={18} className="text-text-muted" />
                     </div>
                     <div className="flex-1">
                       <label className="block text-[12px] font-medium text-on-surface mb-1 font-geist">GitHub or Web URL</label>
                       <input
-                        className="w-full bg-transparent border-b border-border-subtle focus:border-secondary text-[14px] text-on-surface py-1 px-0 focus:ring-0 focus:outline-none"
+                        className="w-full bg-transparent border-b border-border-subtle focus:border-secondary text-[14px] text-on-surface py-1.5 px-2 focus:ring-0 focus:outline-none"
                         placeholder="https://github.com/owner/repo"
                         value={githubRepoUrl}
                         onChange={(e) => setGithubRepoUrl(e.target.value)}
@@ -374,13 +399,13 @@ function CreateQuizPage() {
                 </div>
                 <div className="border border-border-subtle border-dashed rounded-lg p-3 hover:border-outline-variant transition-colors relative flex items-center justify-center min-h-[72px]">
                   {documents.length > 0 ? (
-                    <div className="text-center">
-                      <Icon name="description" size={20} className="text-secondary block mx-auto mb-1" />
+                    <div className="flex flex-col items-center justify-center gap-1">
+                      <Icon name="description" size={32} className="text-secondary" />
                       <span className="text-[12px] text-secondary">{documents.length} file(s) selected</span>
                     </div>
                   ) : (
-                    <div className="text-center">
-                      <Icon name="upload_file" size={20} className="text-text-muted block mx-auto mb-1" />
+                    <div className="flex flex-col items-center justify-center gap-1">
+                      <Icon name="upload_file" size={32} className="text-text-muted" />
                       <span className="text-[12px] text-text-muted">Upload Document (.pdf, .txt, .docx)</span>
                     </div>
                   )}
@@ -684,7 +709,7 @@ function QuizPage() {
                           <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isSelected || isCorrect ? 'border-secondary' : 'border-outline'}`}>
                             {(isSelected || isCorrect) && <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />}
                           </div>
-                          <input type="radio" name={`q-${idx}`} disabled={submitted} checked={isSelected} onChange={() => setAnswers((prev) => ({ ...prev, [idx]: cIdx }))} className="sr-only" />
+                          <input type="radio" name={`q-${idx}`} disabled={submitted} checked={isSelected} onChange={() => setAnswers((prev) => ({ ...prev, [idx]: cIdx }))} className="hidden" />
                           <span className={`text-[14px] ${isSelected ? 'text-on-surface' : 'text-on-surface-variant group-hover:text-on-surface'}`}>{choice}</span>
                           {submitted && isCorrect && <Icon name="check_circle" size={18} className="text-success ml-auto shrink-0" fill />}
                           {submitted && isWrong && <Icon name="cancel" size={18} className="text-error ml-auto shrink-0" fill />}
@@ -719,6 +744,7 @@ function QuizPage() {
 // ─── Results Page (/results) ──────────────────────────────────────────────────
 
 function ResultsPage() {
+  const navigate = useNavigate();
   const [history, setHistory] = useState<AttemptHistory[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [resultsTab, setResultsTab] = useState<'history' | 'metrics'>('history');
@@ -804,9 +830,9 @@ function ResultsPage() {
                 ) : history.map((h) => {
                   const pct = Math.round((h.score / h.total) * 100);
                   return (
-                    <div key={h.id} className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle hover:bg-surface-variant/30 transition-colors items-center last:border-b-0">
+                    <div key={h.id} onClick={() => navigate(`/review/${h.id}`)} className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle hover:bg-surface-variant/30 transition-colors items-center last:border-b-0 cursor-pointer group">
                       <div className="col-span-5 flex flex-col">
-                        <span className="text-[14px] text-on-surface font-medium">{h.quizTitle}</span>
+                        <span className="text-[14px] text-on-surface font-medium group-hover:text-accent-teal transition-colors">{h.quizTitle}</span>
                         <span className="text-[12px] text-text-muted">{h.score}/{h.total} questions</span>
                       </div>
                       <div className="col-span-3 hidden sm:block text-[14px] text-text-muted">{new Date(h.completedAt).toLocaleDateString()}</div>
@@ -903,6 +929,575 @@ function ResultsPage() {
   );
 }
 
+// ─── Review Page (/review/:attemptId) ────────────────────────────────────────
+
+function ReviewPage() {
+  const { attemptId } = useParams<{ attemptId: string }>();
+  const navigate = useNavigate();
+  const [attempt, setAttempt] = useState<AttemptReview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    req<AttemptReview>(`/api/attempts/${attemptId}`)
+      .then(setAttempt)
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load attempt'))
+      .finally(() => setLoading(false));
+  }, [attemptId]);
+
+  if (loading) return (
+    <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: '#141313' }}>
+      <span className="text-text-muted text-[14px]">Loading...</span>
+    </div>
+  );
+
+  if (error || !attempt) return (
+    <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: '#141313' }}>
+      <div className="text-center">
+        <p className="text-error text-[14px] mb-4">{error ?? 'Attempt not found'}</p>
+        <button onClick={() => navigate('/results')} className="text-[12px] text-text-muted hover:text-on-surface">← Back to Results</button>
+      </div>
+    </div>
+  );
+
+  const { quiz, answers } = attempt;
+  const score = quiz.questions.reduce((acc, q, i) => acc + ((answers[i] ?? -1) === q.correctIndex ? 1 : 0), 0);
+  const pct = Math.round((score / quiz.questions.length) * 100);
+  const completedDate = new Date(attempt.completedAt).toLocaleString();
+
+  return (
+    <>
+      {/* Topbar */}
+      <header className="flex justify-between items-center h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
+        <div className="flex items-center gap-2 text-text-muted min-w-0">
+          <button onClick={() => navigate('/results')} className="hover:text-on-surface transition-colors text-[12px] hidden md:flex items-center gap-1 shrink-0">
+            <Icon name="arrow_back" size={16} /> Results
+          </button>
+          <Icon name="chevron_right" size={16} className="hidden md:block shrink-0" />
+          <span className="text-[12px] text-on-surface truncate">{quiz.title}</span>
+          <span className="ml-2 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider shrink-0">Read-only</span>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-[12px] text-text-muted hidden md:block">{completedDate}</span>
+          <span className={`px-4 py-1.5 rounded text-[12px] font-bold ${scoreColor(pct)}`} style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>
+            {score}/{quiz.questions.length} · {pct}%
+          </span>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main className="flex-1 overflow-y-auto" style={{ backgroundColor: '#141313' }}>
+        <div className="max-w-[1200px] mx-auto px-6 py-8 pb-8">
+          {/* Quiz header */}
+          <div className="mb-8 border-b border-border-subtle pb-6">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.difficulty}</span>
+              <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.questionType.replace('_', ' ')}</span>
+              <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{formatSeconds(attempt.timeTakenSeconds)}</span>
+            </div>
+            <h2 className="text-[32px] font-bold text-on-surface font-geist tracking-tight">{quiz.title}</h2>
+            <p className="text-[16px] text-text-muted mt-2 max-w-2xl">{quiz.topic}</p>
+          </div>
+
+          {/* Questions — all, read-only */}
+          <div className="flex flex-col gap-4">
+            {quiz.questions.map((q, idx) => {
+              const selected = answers[idx] ?? -1;
+              const isCorrect = (cIdx: number) => cIdx === q.correctIndex;
+              const isWrong = (cIdx: number) => selected === cIdx && cIdx !== q.correctIndex;
+              const skipped = selected === -1;
+
+              return (
+                <div key={idx} className="rounded-lg p-6 border border-border-subtle" style={{ backgroundColor: '#1c1b1b' }}>
+                  <div className="flex items-start gap-3 mb-4">
+                    <span className="font-mono text-sm text-text-muted mt-0.5 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
+                    <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                    {skipped && <span className="ml-auto shrink-0 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px]">Skipped</span>}
+                  </div>
+
+                  <div className="flex flex-col gap-3 ml-8">
+                    {q.choices.map((choice, cIdx) => {
+                      let cls = 'flex items-center gap-4 p-4 rounded border transition-colors';
+                      if (isCorrect(cIdx)) cls += ' quiz-option-correct';
+                      else if (isWrong(cIdx)) cls += ' quiz-option-wrong';
+                      else cls += ' border-border-subtle opacity-50';
+
+                      return (
+                        <div key={cIdx} className={cls}>
+                          <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isCorrect(cIdx) ? 'border-secondary' : 'border-outline'}`}>
+                            {(selected === cIdx || isCorrect(cIdx)) && (
+                              <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />
+                            )}
+                          </div>
+                          <span className={`text-[14px] flex-1 ${isCorrect(cIdx) ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
+                          {isCorrect(cIdx) && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
+                          {isWrong(cIdx) && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {q.explanation && (
+                    <div className="mt-4 ml-8 p-3 bg-surface-container rounded border border-border-subtle">
+                      <p className="text-[13px] text-text-muted"><span className="text-secondary font-medium mr-1">Explanation:</span>{q.explanation}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Summary */}
+          <div className="mt-8 pt-6 border-t border-border-subtle flex justify-between items-center">
+            <span className="text-[12px] text-text-muted">{quiz.questions.filter((_, i) => answers[i] !== undefined && answers[i] !== -1).length} of {quiz.questions.length} answered</span>
+            <span className={`text-[14px] font-bold ${scoreColor(pct)}`}>Final Score: {pct}%</span>
+          </div>
+        </div>
+      </main>
+    </>
+  );
+}
+
+// ─── Settings Page (/settings) ───────────────────────────────────────────────
+
+type SettingsDisplay = {
+  LLM_API_STYLE: string;
+  LLM_BASE_URL: string;
+  LLM_API_KEY_MASKED: string;
+  LLM_MODEL: string;
+  LLM_MAX_TOKENS: number;
+  LLM_TEMPERATURE: number;
+  EMBEDDING_API_STYLE: string;
+  EMBEDDING_BASE_URL: string;
+  EMBEDDING_API_KEY_MASKED: string;
+  EMBEDDING_MODEL: string;
+  MAX_EMBEDDING_CANDIDATES: number;
+  EMBEDDING_BATCH_SIZE: number;
+  MAX_RETRIEVED_CHUNKS: number;
+  MAX_RETRIEVED_CHARS: number;
+  RATE_LIMIT_MAX_REQUESTS: number;
+  GENERATE_RATE_LIMIT_MAX_REQUESTS: number;
+  ENCRYPTION_CONFIGURED: boolean;
+};
+
+function SettingsField({
+  label, hint, error, children
+}: { label: string; hint?: string; error?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-[12px] font-medium text-on-surface font-geist">{label}</label>
+      {children}
+      {hint && !error && <p className="text-[11px] text-text-muted">{hint}</p>}
+      {error && <p className="text-[11px] text-error">{error}</p>}
+    </div>
+  );
+}
+
+function SettingsInput({ className = '', ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`w-full bg-[#0D0D0D] border border-border-subtle rounded px-3 py-2 text-[14px] text-on-surface focus:outline-none focus:border-accent-teal transition-colors ${className}`}
+    />
+  );
+}
+
+function SettingsSelect({ className = '', ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <div className="relative">
+      <select
+        {...props}
+        className={`w-full bg-[#0D0D0D] border border-border-subtle rounded px-3 py-2 text-[14px] text-on-surface appearance-none focus:outline-none focus:border-accent-teal transition-colors pr-8 ${className}`}
+      />
+      <Icon name="expand_more" size={18} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+    </div>
+  );
+}
+
+function SettingsPage() {
+  const navigate = useNavigate();
+  const [display, setDisplay] = useState<SettingsDisplay | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Form state
+  const [llmApiStyle, setLlmApiStyle] = useState('openai_compatible');
+  const [llmBaseUrl, setLlmBaseUrl] = useState('');
+  const [llmApiKey, setLlmApiKey] = useState('');
+  const [llmModel, setLlmModel] = useState('');
+  const [llmMaxTokens, setLlmMaxTokens] = useState('');
+  const [llmTemperature, setLlmTemperature] = useState('');
+  const [embApiStyle, setEmbApiStyle] = useState('same_as_llm');
+  const [embBaseUrl, setEmbBaseUrl] = useState('');
+  const [embApiKey, setEmbApiKey] = useState('');
+  const [embModel, setEmbModel] = useState('');
+  const [maxEmbCandidates, setMaxEmbCandidates] = useState('');
+  const [embBatchSize, setEmbBatchSize] = useState('');
+  const [maxChunks, setMaxChunks] = useState('');
+  const [maxChars, setMaxChars] = useState('');
+  const [rateLimitMax, setRateLimitMax] = useState('');
+  const [generateRateLimitMax, setGenerateRateLimitMax] = useState('');
+  const [encKey, setEncKey] = useState('');
+  const [showLlmKey, setShowLlmKey] = useState(false);
+  const [showEmbKey, setShowEmbKey] = useState(false);
+  const [showEncKey, setShowEncKey] = useState(false);
+
+  // Validation errors
+  const [errs, setErrs] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    req<SettingsDisplay>('/api/settings')
+      .then((data) => {
+        setDisplay(data);
+        setLlmApiStyle(data.LLM_API_STYLE);
+        setLlmBaseUrl(data.LLM_BASE_URL);
+        setLlmModel(data.LLM_MODEL);
+        setLlmMaxTokens(String(data.LLM_MAX_TOKENS));
+        setLlmTemperature(String(data.LLM_TEMPERATURE));
+        setEmbApiStyle(data.EMBEDDING_API_STYLE);
+        setEmbBaseUrl(data.EMBEDDING_BASE_URL);
+        setEmbModel(data.EMBEDDING_MODEL);
+        setMaxEmbCandidates(String(data.MAX_EMBEDDING_CANDIDATES));
+        setEmbBatchSize(String(data.EMBEDDING_BATCH_SIZE));
+        setMaxChunks(String(data.MAX_RETRIEVED_CHUNKS));
+        setMaxChars(String(data.MAX_RETRIEVED_CHARS));
+        setRateLimitMax(String(data.RATE_LIMIT_MAX_REQUESTS));
+        setGenerateRateLimitMax(String(data.GENERATE_RATE_LIMIT_MAX_REQUESTS));
+      })
+      .catch((e) => setLoadError(e instanceof Error ? e.message : 'Failed to load settings'));
+  }, []);
+
+  function validate(): Record<string, string> {
+    const e: Record<string, string> = {};
+    if (!llmBaseUrl.trim()) e.llmBaseUrl = 'Required';
+    else {
+      try { new URL(llmBaseUrl); } catch { e.llmBaseUrl = 'Must be a valid URL'; }
+    }
+    if (!llmModel.trim()) e.llmModel = 'Required';
+    const tokens = Number(llmMaxTokens);
+    if (!llmMaxTokens || isNaN(tokens) || tokens < 1 || !Number.isInteger(tokens)) e.llmMaxTokens = 'Must be a positive integer';
+    const temp = Number(llmTemperature);
+    if (llmTemperature === '' || isNaN(temp) || temp < 0 || temp > 2) e.llmTemperature = 'Must be 0–2';
+    const emc = Number(maxEmbCandidates);
+    if (!maxEmbCandidates || isNaN(emc) || emc < 20 || emc > 500 || !Number.isInteger(emc)) e.maxEmbCandidates = 'Range: 20–500';
+    const ebs = Number(embBatchSize);
+    if (!embBatchSize || isNaN(ebs) || ebs < 4 || ebs > 256 || !Number.isInteger(ebs)) e.embBatchSize = 'Range: 4–256';
+    const mc = Number(maxChunks);
+    if (!maxChunks || isNaN(mc) || mc < 4 || mc > 40 || !Number.isInteger(mc)) e.maxChunks = 'Range: 4–40';
+    const mch = Number(maxChars);
+    if (!maxChars || isNaN(mch) || mch < 4000 || mch > 120000 || !Number.isInteger(mch)) e.maxChars = 'Range: 4000–120000';
+    const rl = Number(rateLimitMax);
+    if (!rateLimitMax || isNaN(rl) || rl < 1 || !Number.isInteger(rl)) e.rateLimitMax = 'Must be a positive integer';
+    const grl = Number(generateRateLimitMax);
+    if (!generateRateLimitMax || isNaN(grl) || grl < 1 || !Number.isInteger(grl)) e.generateRateLimitMax = 'Must be a positive integer';
+    // If API keys are provided but no enc key configured on server and key not provided
+    const hasNewSecrets = (llmApiKey.trim() || embApiKey.trim());
+    if (hasNewSecrets && !display?.ENCRYPTION_CONFIGURED && !encKey.trim()) {
+      e.encKey = 'Provide an encryption key to save API secrets (also set SETTINGS_ENCRYPTION_KEY on the server)';
+    }
+    return e;
+  }
+
+  async function save() {
+    const errors = validate();
+    setErrs(errors);
+    if (Object.keys(errors).length) return;
+
+    setSaving(true); setSaveError(null); setSaveSuccess(false);
+    try {
+      const body: Record<string, unknown> = {
+        LLM_API_STYLE: llmApiStyle,
+        LLM_BASE_URL: llmBaseUrl.trim(),
+        LLM_MODEL: llmModel.trim(),
+        LLM_MAX_TOKENS: Number(llmMaxTokens),
+        LLM_TEMPERATURE: Number(llmTemperature),
+        EMBEDDING_API_STYLE: embApiStyle,
+        EMBEDDING_BASE_URL: embBaseUrl.trim() || undefined,
+        EMBEDDING_MODEL: embModel.trim() || undefined,
+        MAX_EMBEDDING_CANDIDATES: Number(maxEmbCandidates),
+        EMBEDDING_BATCH_SIZE: Number(embBatchSize),
+        MAX_RETRIEVED_CHUNKS: Number(maxChunks),
+        MAX_RETRIEVED_CHARS: Number(maxChars),
+        RATE_LIMIT_MAX_REQUESTS: Number(rateLimitMax),
+        GENERATE_RATE_LIMIT_MAX_REQUESTS: Number(generateRateLimitMax),
+      };
+      // Only include keys if user entered new values
+      if (llmApiKey.trim()) body.LLM_API_KEY = llmApiKey.trim();
+      if (embApiKey.trim()) body.EMBEDDING_API_KEY = embApiKey.trim();
+      if (encKey.trim()) body.encryptionKey = encKey.trim();
+
+      const updated = await req<SettingsDisplay>('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      setDisplay(updated);
+      setLlmApiKey(''); setEmbApiKey(''); // clear after save
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const section = 'scroll-mt-8';
+  const sectionTitle = 'text-[18px] font-medium text-on-surface mb-4 pb-2 border-b border-border-subtle font-geist';
+  const card = 'bg-surface-container rounded-lg border border-border-subtle p-6 space-y-6';
+
+  if (loadError) return (
+    <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: '#141313' }}>
+      <div className="text-center">
+        <p className="text-error text-[14px] mb-4">{loadError}</p>
+        <button onClick={() => navigate('/')} className="text-[12px] text-text-muted hover:text-on-surface">← Back</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* Topbar */}
+      <header className="flex items-center justify-between px-6 py-5 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
+        <div>
+          <div className="flex items-center gap-1 text-text-muted mb-1">
+            <span className="text-[10px] uppercase tracking-wider">App</span>
+            <Icon name="chevron_right" size={14} />
+            <span className="text-[10px] uppercase tracking-wider text-on-surface">Configuration</span>
+          </div>
+          <h2 className="text-[32px] font-bold text-on-surface font-geist">Settings</h2>
+        </div>
+        <div className="flex items-center gap-3">
+          {saveSuccess && (
+            <span className="flex items-center gap-1 text-success text-[12px] font-medium">
+              <Icon name="check_circle" size={16} fill className="text-success" /> Saved
+            </span>
+          )}
+          <button
+            onClick={() => void save()}
+            disabled={saving || !display}
+            className="px-4 py-2 bg-secondary text-on-secondary text-[12px] font-bold rounded hover:opacity-90 disabled:opacity-50 transition-all flex items-center gap-2"
+          >
+            {saving && <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>}
+            Save Changes
+          </button>
+        </div>
+      </header>
+
+      <div className="flex-1 overflow-y-auto" style={{ backgroundColor: '#141313' }}>
+        <div className="max-w-[1200px] mx-auto px-6 py-8">
+          {saveError && (
+            <div className="mb-6 bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{saveError}</div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-8 items-start">
+            {/* In-page nav */}
+            <nav className="hidden md:block sticky top-8">
+              <ul className="space-y-1">
+                {[
+                  { href: '#llm', label: 'LLM Provider' },
+                  { href: '#embedding', label: 'Embedding & Advanced' },
+                  { href: '#ratelimit', label: 'Rate Limiting' },
+                  { href: '#security', label: 'Security' },
+                ].map(({ href, label }) => (
+                  <li key={href}>
+                    <a href={href} className="block px-3 py-2 text-text-muted hover:text-on-surface hover:bg-surface-variant text-[12px] rounded transition-colors font-geist">
+                      {label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+
+            {/* Forms */}
+            <div className="space-y-8 pb-24">
+              {/* LLM */}
+              <section id="llm" className={section}>
+                <h3 className={sectionTitle}>LLM Provider</h3>
+                <div className={card}>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <SettingsField label="API Style" hint="Used for quiz generation.">
+                      <SettingsSelect value={llmApiStyle} onChange={(e) => setLlmApiStyle(e.target.value)}>
+                        <option value="openai_compatible">OpenAI Compatible (LiteLLM, Ollama…)</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                      </SettingsSelect>
+                    </SettingsField>
+                    <SettingsField label="Base URL" error={errs.llmBaseUrl} hint="e.g. https://api.openai.com/v1">
+                      <SettingsInput value={llmBaseUrl} onChange={(e) => setLlmBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" />
+                    </SettingsField>
+                  </div>
+
+                  <SettingsField
+                    label="API Key"
+                    hint={display?.LLM_API_KEY_MASKED ? `Current: ${display.LLM_API_KEY_MASKED} — Leave blank to keep.` : 'No key saved yet.'}
+                  >
+                    <div className="relative">
+                      <SettingsInput
+                        type={showLlmKey ? 'text' : 'password'}
+                        value={llmApiKey}
+                        onChange={(e) => setLlmApiKey(e.target.value)}
+                        placeholder="Enter new key to update"
+                        className="pr-10"
+                      />
+                      <button type="button" onClick={() => setShowLlmKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-on-surface">
+                        <Icon name={showLlmKey ? 'visibility_off' : 'visibility'} size={18} />
+                      </button>
+                    </div>
+                  </SettingsField>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <SettingsField label="Model Name *" error={errs.llmModel}>
+                      <SettingsInput value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="gpt-4o-mini" />
+                    </SettingsField>
+                    <SettingsField label="Max Tokens *" error={errs.llmMaxTokens}>
+                      <SettingsInput type="number" min={1} value={llmMaxTokens} onChange={(e) => setLlmMaxTokens(e.target.value)} placeholder="2000" />
+                    </SettingsField>
+                  </div>
+
+                  <SettingsField label={`Temperature: ${llmTemperature}`} error={errs.llmTemperature} hint="0 = precise, 2 = very creative">
+                    <input
+                      type="range" min={0} max={2} step={0.1}
+                      value={llmTemperature}
+                      onChange={(e) => setLlmTemperature(e.target.value)}
+                      className="w-full h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-accent-teal"
+                    />
+                    <div className="flex justify-between text-[11px] text-text-muted mt-1">
+                      <span>Precise (0)</span><span>Creative (2)</span>
+                    </div>
+                  </SettingsField>
+                </div>
+              </section>
+
+              {/* Embedding & Advanced */}
+              <section id="embedding" className={section}>
+                <h3 className={sectionTitle}>Embedding & Advanced Config</h3>
+                <div className="bg-surface-container rounded-lg border border-border-subtle overflow-hidden">
+                  {/* Embedding sub-section */}
+                  <div className="p-6 border-b border-border-subtle space-y-6">
+                    <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Embedding Model</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <SettingsField label="API Style">
+                        <SettingsSelect value={embApiStyle} onChange={(e) => setEmbApiStyle(e.target.value)}>
+                          <option value="same_as_llm">Same as LLM</option>
+                          <option value="openai_compatible">OpenAI Compatible</option>
+                          <option value="openai">OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="Model Name">
+                        <SettingsInput value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="text-embedding-3-small" />
+                      </SettingsField>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <SettingsField label="Base URL" hint="Leave blank to inherit from LLM">
+                        <SettingsInput value={embBaseUrl} onChange={(e) => setEmbBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" />
+                      </SettingsField>
+                      <SettingsField
+                        label="API Key"
+                        hint={display?.EMBEDDING_API_KEY_MASKED ? `Current: ${display.EMBEDDING_API_KEY_MASKED} — Leave blank to keep.` : 'Leave blank to use LLM key.'}
+                      >
+                        <div className="relative">
+                          <SettingsInput
+                            type={showEmbKey ? 'text' : 'password'}
+                            value={embApiKey}
+                            onChange={(e) => setEmbApiKey(e.target.value)}
+                            placeholder="Enter new key to update"
+                            className="pr-10"
+                          />
+                          <button type="button" onClick={() => setShowEmbKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-on-surface">
+                            <Icon name={showEmbKey ? 'visibility_off' : 'visibility'} size={18} />
+                          </button>
+                        </div>
+                      </SettingsField>
+                    </div>
+                  </div>
+
+                  {/* Retrieval params */}
+                  <div className="p-6 bg-surface-container-low space-y-6">
+                    <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Retrieval Parameters</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <SettingsField label="Max Embedding Candidates *" error={errs.maxEmbCandidates} hint="Range: 20–500">
+                        <SettingsInput type="number" min={20} max={500} value={maxEmbCandidates} onChange={(e) => setMaxEmbCandidates(e.target.value)} />
+                      </SettingsField>
+                      <SettingsField label="Embedding Batch Size *" error={errs.embBatchSize} hint="Range: 4–256">
+                        <SettingsInput type="number" min={4} max={256} value={embBatchSize} onChange={(e) => setEmbBatchSize(e.target.value)} />
+                      </SettingsField>
+                      <SettingsField label="Max Retrieved Chunks *" error={errs.maxChunks} hint="Range: 4–40">
+                        <SettingsInput type="number" min={4} max={40} value={maxChunks} onChange={(e) => setMaxChunks(e.target.value)} />
+                      </SettingsField>
+                      <SettingsField label="Max Retrieved Chars *" error={errs.maxChars} hint="Range: 4000–120000">
+                        <SettingsInput type="number" min={4000} max={120000} value={maxChars} onChange={(e) => setMaxChars(e.target.value)} />
+                      </SettingsField>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Rate Limiting */}
+              <section id="ratelimit" className={section}>
+                <h3 className={sectionTitle}>Rate Limiting</h3>
+                <div className={card}>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <SettingsField label="Max Requests / window *" error={errs.rateLimitMax} hint="General API limit per window">
+                      <SettingsInput type="number" min={1} value={rateLimitMax} onChange={(e) => setRateLimitMax(e.target.value)} />
+                    </SettingsField>
+                    <SettingsField label="Generate Max Requests / window *" error={errs.generateRateLimitMax} hint="Limit for quiz generation endpoint (expensive)">
+                      <SettingsInput type="number" min={1} value={generateRateLimitMax} onChange={(e) => setGenerateRateLimitMax(e.target.value)} />
+                    </SettingsField>
+                  </div>
+                </div>
+              </section>
+
+              {/* Security */}
+              <section id="security" className={section}>
+                <h3 className={sectionTitle}>Security</h3>
+                <div className={card}>
+                  <div className="flex items-start gap-3 p-3 bg-surface-container-low rounded border border-border-subtle">
+                    <Icon name={display?.ENCRYPTION_CONFIGURED ? 'lock' : 'lock_open'} size={20} className={display?.ENCRYPTION_CONFIGURED ? 'text-success shrink-0 mt-0.5' : 'text-yellow-400 shrink-0 mt-0.5'} />
+                    <div>
+                      <p className="text-[13px] text-on-surface font-medium">
+                        {display?.ENCRYPTION_CONFIGURED ? 'Encryption key configured on server' : 'No encryption key configured on server'}
+                      </p>
+                      <p className="text-[12px] text-text-muted mt-0.5">
+                        {display?.ENCRYPTION_CONFIGURED
+                          ? 'API keys are stored encrypted. Provide the same key below when saving secrets.'
+                          : 'Set SETTINGS_ENCRYPTION_KEY env var on the server to enable encrypted storage. Generate with: openssl rand -hex 32'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <SettingsField
+                    label="Encryption Key"
+                    hint="Required when saving API keys. Must match SETTINGS_ENCRYPTION_KEY on the server."
+                    error={errs.encKey}
+                  >
+                    <div className="relative">
+                      <SettingsInput
+                        type={showEncKey ? 'text' : 'password'}
+                        value={encKey}
+                        onChange={(e) => setEncKey(e.target.value)}
+                        placeholder="Enter server encryption key to unlock secret fields"
+                        className="pr-10"
+                      />
+                      <button type="button" onClick={() => setShowEncKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-on-surface">
+                        <Icon name={showEncKey ? 'visibility_off' : 'visibility'} size={18} />
+                      </button>
+                    </div>
+                  </SettingsField>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function App() {
@@ -922,7 +1517,9 @@ export function App() {
           <Routes>
             <Route path="/" element={<CreateQuizPage />} />
             <Route path="/quiz/:id" element={<QuizPage />} />
+            <Route path="/review/:attemptId" element={<ReviewPage />} />
             <Route path="/results" element={<ResultsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Layout>

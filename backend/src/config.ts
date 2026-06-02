@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const configSchema = z.object({
+export const configSchema = z.object({
   PORT: z.coerce.number().default(3000),
   PUBLIC_URL: z.string().default('http://localhost:3000'),
   DATABASE_URL: z.string(),
@@ -25,7 +25,10 @@ const configSchema = z.object({
   BASIC_AUTH_PASSWORD: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(300),
-  GENERATE_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(20)
+  GENERATE_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(20),
+  // Master key used to encrypt secret fields stored in app_settings table.
+  // Generate with: openssl rand -hex 32
+  SETTINGS_ENCRYPTION_KEY: z.string().optional()
 });
 
 export const config = configSchema.parse(process.env);
