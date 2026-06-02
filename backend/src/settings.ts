@@ -103,22 +103,11 @@ export type SettingsSaveInput = z.infer<typeof settingsSaveSchema>;
 export { settingsSaveSchema };
 
 /**
- * Persists settings to DB. Secret fields are encrypted if SETTINGS_ENCRYPTION_KEY is configured.
- * Pass encryptionKey in the request to verify the caller knows the key before we trust them with secrets.
- * If the provided key doesn't match SETTINGS_ENCRYPTION_KEY, throws an error.
+ * Persists settings to DB. Secret fields are encrypted using SETTINGS_ENCRYPTION_KEY from env.
+ * If no encryption key is configured, secrets are stored in plaintext with a warning.
  */
-export async function saveSettings(
-  input: SettingsSaveInput,
-  encryptionKey?: string
-): Promise<void> {
-  const masterKey = config.SETTINGS_ENCRYPTION_KEY;
-
-  // If caller provided a key, it must match master key
-  if (encryptionKey && masterKey && encryptionKey !== masterKey) {
-    throw new Error('Encryption key does not match server configuration');
-  }
-
-  const keyToUse = encryptionKey ?? masterKey;
+export async function saveSettings(input: SettingsSaveInput): Promise<void> {
+  const keyToUse = config.SETTINGS_ENCRYPTION_KEY;
 
   const client = await pool.connect();
   try {

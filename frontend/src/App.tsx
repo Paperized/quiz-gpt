@@ -1140,13 +1140,8 @@ function SettingsPage() {
   const [maxChars, setMaxChars] = useState('');
   const [rateLimitMax, setRateLimitMax] = useState('');
   const [generateRateLimitMax, setGenerateRateLimitMax] = useState('');
-  const [encKey, setEncKey] = useState('');
-  const [showLlmKey, setShowLlmKey] = useState(false);
-  const [showEmbKey, setShowEmbKey] = useState(false);
-  const [showEncKey, setShowEncKey] = useState(false);
-
-  // Validation errors
   const [errs, setErrs] = useState<Record<string, string>>({});
+  const [showEmbKey, setShowEmbKey] = useState(false);
 
   useEffect(() => {
     req<SettingsDisplay>('/api/settings')
@@ -1193,11 +1188,6 @@ function SettingsPage() {
     if (!rateLimitMax || isNaN(rl) || rl < 1 || !Number.isInteger(rl)) e.rateLimitMax = 'Must be a positive integer';
     const grl = Number(generateRateLimitMax);
     if (!generateRateLimitMax || isNaN(grl) || grl < 1 || !Number.isInteger(grl)) e.generateRateLimitMax = 'Must be a positive integer';
-    // If API keys are provided but no enc key configured on server and key not provided
-    const hasNewSecrets = (llmApiKey.trim() || embApiKey.trim());
-    if (hasNewSecrets && !display?.ENCRYPTION_CONFIGURED && !encKey.trim()) {
-      e.encKey = 'Provide an encryption key to save API secrets (also set SETTINGS_ENCRYPTION_KEY on the server)';
-    }
     return e;
   }
 
@@ -1227,7 +1217,6 @@ function SettingsPage() {
       // Only include keys if user entered new values
       if (llmApiKey.trim()) body.LLM_API_KEY = llmApiKey.trim();
       if (embApiKey.trim()) body.EMBEDDING_API_KEY = embApiKey.trim();
-      if (encKey.trim()) body.encryptionKey = encKey.trim();
 
       const updated = await req<SettingsDisplay>('/api/settings', {
         method: 'PUT',
@@ -1301,7 +1290,6 @@ function SettingsPage() {
                   { href: '#llm', label: 'LLM Provider' },
                   { href: '#embedding', label: 'Embedding & Advanced' },
                   { href: '#ratelimit', label: 'Rate Limiting' },
-                  { href: '#security', label: 'Security' },
                 ].map(({ href, label }) => (
                   <li key={href}>
                     <a href={href} className="block px-3 py-2 text-text-muted hover:text-on-surface hover:bg-surface-variant text-[12px] rounded transition-colors font-geist">
@@ -1452,7 +1440,7 @@ function SettingsPage() {
                 </div>
               </section>
 
-              {/* Security */}
+              {/* Security — status only, key managed via env */}
               <section id="security" className={section}>
                 <h3 className={sectionTitle}>Security</h3>
                 <div className={card}>
@@ -1460,34 +1448,15 @@ function SettingsPage() {
                     <Icon name={display?.ENCRYPTION_CONFIGURED ? 'lock' : 'lock_open'} size={20} className={display?.ENCRYPTION_CONFIGURED ? 'text-success shrink-0 mt-0.5' : 'text-yellow-400 shrink-0 mt-0.5'} />
                     <div>
                       <p className="text-[13px] text-on-surface font-medium">
-                        {display?.ENCRYPTION_CONFIGURED ? 'Encryption key configured on server' : 'No encryption key configured on server'}
+                        {display?.ENCRYPTION_CONFIGURED ? 'Secret encryption active' : 'Encryption not configured'}
                       </p>
                       <p className="text-[12px] text-text-muted mt-0.5">
                         {display?.ENCRYPTION_CONFIGURED
-                          ? 'API keys are stored encrypted. Provide the same key below when saving secrets.'
-                          : 'Set SETTINGS_ENCRYPTION_KEY env var on the server to enable encrypted storage. Generate with: openssl rand -hex 32'}
+                          ? 'API keys are stored encrypted in the database using AES-256-GCM.'
+                          : 'Set SETTINGS_ENCRYPTION_KEY in the server .env to enable encrypted storage. Generate with: openssl rand -hex 32'}
                       </p>
                     </div>
                   </div>
-
-                  <SettingsField
-                    label="Encryption Key"
-                    hint="Required when saving API keys. Must match SETTINGS_ENCRYPTION_KEY on the server."
-                    error={errs.encKey}
-                  >
-                    <div className="relative">
-                      <SettingsInput
-                        type={showEncKey ? 'text' : 'password'}
-                        value={encKey}
-                        onChange={(e) => setEncKey(e.target.value)}
-                        placeholder="Enter server encryption key to unlock secret fields"
-                        className="pr-10"
-                      />
-                      <button type="button" onClick={() => setShowEncKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-on-surface">
-                        <Icon name={showEncKey ? 'visibility_off' : 'visibility'} size={18} />
-                      </button>
-                    </div>
-                  </SettingsField>
                 </div>
               </section>
             </div>

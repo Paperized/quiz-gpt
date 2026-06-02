@@ -487,24 +487,17 @@ app.get('/api/settings', asyncRoute(async (_req, res) => {
   return res.json(display);
 }));
 
-const settingsUpdateRequestSchema = settingsSaveSchema.extend({
-  encryptionKey: z.string().optional()
-});
-
 app.put('/api/settings', asyncRoute(async (req, res) => {
-  const parsed = settingsUpdateRequestSchema.safeParse(req.body);
+  const parsed = settingsSaveSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
   }
-  const { encryptionKey, ...settingsInput } = parsed.data;
   try {
-    await saveSettings(settingsInput, encryptionKey);
+    await saveSettings(parsed.data);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Failed to save settings';
-    if (msg.includes('Encryption key')) return res.status(403).json({ error: msg });
     throw err;
   }
-  logger.info('settings_saved', { keys: Object.keys(settingsInput) });
+  logger.info('settings_saved', { keys: Object.keys(parsed.data) });
   const display = await getSettingsForDisplay();
   return res.json(display);
 }));
