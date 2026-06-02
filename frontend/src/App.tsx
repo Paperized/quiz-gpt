@@ -191,18 +191,21 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           </button>
         </div>
 
-        {/* Results nav */}
-        <ul className="px-2">
-          <li>
-            <button
-              onClick={() => { navigate('/results'); onClose(); }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded transition-colors duration-200 ${isResults ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
-            >
-              <Icon name="bar_chart" size={18} className={isResults ? 'text-secondary' : ''} />
-              <span className="text-[12px] font-medium">Results</span>
-            </button>
-          </li>
-        </ul>
+        {/* Navigation */}
+        <div className="px-4 pb-2">
+          <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] mb-1 px-1">Navigation</h3>
+          <ul className="flex flex-col gap-0.5">
+            <li>
+              <button
+                onClick={() => { navigate('/results'); onClose(); }}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors duration-200 ${isResults ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+              >
+                <Icon name="bar_chart" size={18} className={isResults ? 'text-secondary' : ''} />
+                <span className="text-[12px] font-medium">Results & Metrics</span>
+              </button>
+            </li>
+          </ul>
+        </div>
 
         {/* Pinned */}
         {pinnedQuizzes.length > 0 && (
@@ -236,7 +239,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
 
         {/* Recent */}
         <div className="mt-6 px-4 flex-1">
-          <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] mb-2 px-1">Recent Activity</h3>
+          <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] mb-2 px-1">Recent</h3>
           <ul className="flex flex-col gap-1">
             {recentQuizzes.map((quiz) => (
               <li key={quiz.id}>
@@ -612,11 +615,14 @@ function QuizPage() {
   return (
     <>
       {/* Topbar */}
-      <header className="flex justify-between items-center h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
-        <div className="flex items-center gap-2 text-text-muted min-w-0">
-          <button onClick={() => navigate('/')} className="hover:text-on-surface transition-colors text-[12px] hidden md:block shrink-0">New Quiz</button>
-          <Icon name="chevron_right" size={16} className="hidden md:block shrink-0" />
-          <span className="text-[12px] text-on-surface truncate">{quiz.title}</span>
+      <header className="relative flex justify-between items-center h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
+        <span className="text-[14px] font-semibold text-on-surface font-geist truncate">{quiz.title}</span>
+        {/* Progress bar — centered absolutely so it doesn't affect left/right layout */}
+        <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none">
+          <div className="w-48 h-1 bg-surface-variant rounded-full overflow-hidden">
+            <div className="h-full bg-secondary rounded-full transition-all duration-300" style={{ width: `${totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0}%` }} />
+          </div>
+          <span className="text-[11px] text-text-muted">{answeredCount}/{totalQuestions}</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <button onClick={shuffle} className="w-8 h-8 flex items-center justify-center rounded text-text-muted hover:text-secondary hover:bg-surface-variant transition-colors" title="Shuffle">
@@ -726,15 +732,6 @@ function QuizPage() {
               );
             })}
           </div>
-
-          {/* Progress */}
-          <div className="mt-8 pt-6 border-t border-border-subtle flex justify-between items-center text-text-muted">
-            <span className="text-[12px]">{answeredCount} of {totalQuestions} Answered</span>
-            <div className="w-48 h-1.5 bg-surface-variant rounded-full overflow-hidden">
-              <div className="h-full bg-secondary rounded-full transition-all" style={{ width: `${totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0}%` }} />
-            </div>
-            {submitted && <span className={`text-[12px] font-bold ${scoreColor(Math.round((finalScore / totalQuestions) * 100))}`}>Score: {Math.round((finalScore / totalQuestions) * 100)}%</span>}
-          </div>
         </div>
       </main>
     </>
@@ -780,8 +777,8 @@ function ResultsPage() {
 
   return (
     <>
-      <header className="flex items-center justify-between px-6 py-5 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
-        <h2 className="text-[18px] font-semibold text-on-surface font-geist">Performance Results</h2>
+      <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
+        <h2 className="text-[14px] font-semibold text-on-surface font-geist">Results & Metrics</h2>
         <button onClick={() => void load()} className="flex items-center gap-2 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-secondary hover:border-secondary transition-colors bg-surface-container-low">
           <Icon name="refresh" size={16} /> Refresh
         </button>
@@ -970,13 +967,9 @@ function ReviewPage() {
     <>
       {/* Topbar */}
       <header className="flex justify-between items-center h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
-        <div className="flex items-center gap-2 text-text-muted min-w-0">
-          <button onClick={() => navigate('/results')} className="hover:text-on-surface transition-colors text-[12px] hidden md:flex items-center gap-1 shrink-0">
-            <Icon name="arrow_back" size={16} /> Results
-          </button>
-          <Icon name="chevron_right" size={16} className="hidden md:block shrink-0" />
-          <span className="text-[12px] text-on-surface truncate">{quiz.title}</span>
-          <span className="ml-2 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider shrink-0">Read-only</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[14px] font-semibold text-on-surface font-geist truncate">{quiz.title}</span>
+          <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider shrink-0">Read-only</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span className="text-[12px] text-text-muted hidden md:block">{completedDate}</span>
@@ -1116,45 +1109,11 @@ function SettingsSelect({ className = '', ...props }: React.SelectHTMLAttributes
 }
 
 function SettingsPage() {
-  const navigate = useNavigate();
   const [display, setDisplay] = useState<SettingsDisplay | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState('llm');
-
-  const sections = [
-    { id: 'llm', label: 'LLM Provider' },
-    { id: 'embedding', label: 'Embedding & Advanced' },
-    { id: 'ratelimit', label: 'Rate Limiting' },
-    { id: 'security', label: 'Security' },
-  ];
-
-  // Track active section via IntersectionObserver
-  useEffect(() => {
-    const observers: IntersectionObserver[] = [];
-    const visibleRatios: Record<string, number> = {};
-
-    sections.forEach(({ id }) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const obs = new IntersectionObserver(
-        ([entry]) => {
-          visibleRatios[id] = entry.intersectionRatio;
-          const best = sections.map((s) => s.id).reduce((a, b) =>
-            (visibleRatios[a] ?? 0) >= (visibleRatios[b] ?? 0) ? a : b
-          );
-          setActiveSection(best);
-        },
-        { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1], rootMargin: '-10% 0px -60% 0px' }
-      );
-      obs.observe(el);
-      observers.push(obs);
-    });
-
-    return () => observers.forEach((o) => o.disconnect());
-  }, [display]); // re-run when display loads (sections render)
 
   // Form state
   const [llmApiStyle, setLlmApiStyle] = useState('openai_compatible');
@@ -1284,20 +1243,8 @@ function SettingsPage() {
   return (
     <>
       {/* Topbar */}
-      <header className="flex items-center justify-between px-6 py-5 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
-        <div>
-          <div className="flex items-center gap-1 text-text-muted mb-1">
-            <span className="text-[10px] uppercase tracking-wider">App</span>
-            <Icon name="chevron_right" size={14} />
-            <span className="text-[10px] uppercase tracking-wider text-on-surface">Configuration</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => navigate(-1)} className="text-text-muted hover:text-secondary transition-colors p-1 rounded-full hover:bg-surface-variant hidden md:flex items-center justify-center" title="Go back">
-              <Icon name="arrow_back" size={20} />
-            </button>
-            <h2 className="text-[32px] font-bold text-on-surface font-geist">Settings</h2>
-          </div>
-        </div>
+      <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
+        <h2 className="text-[14px] font-semibold text-on-surface font-geist">Settings</h2>
         <div className="flex items-center gap-3">
           {saveSuccess && (
             <span className="flex items-center gap-1 text-success text-[12px] font-medium">
@@ -1321,32 +1268,7 @@ function SettingsPage() {
             <div className="mb-6 bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{saveError}</div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-8 items-start">
-            {/* In-page nav */}
-            <nav className="hidden md:block sticky top-8">
-              <ul className="space-y-1">
-                {sections.map(({ id, label }) => {
-                  const isActive = activeSection === id;
-                  return (
-                    <li key={id}>
-                    <button
-                        onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
-                        className={`w-full text-left block px-3 py-2 text-[12px] rounded transition-colors font-geist border-l-2 ${
-                          isActive
-                            ? 'border-secondary bg-surface-container text-on-surface font-medium'
-                            : 'border-transparent text-text-muted hover:text-on-surface hover:bg-surface-variant'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </nav>
-
-            {/* Forms */}
-            <div className="space-y-8 pb-24">
+          <div className="space-y-8 pb-24">
               {/* LLM */}
               <section id="llm" className={section}>
                 <h3 className={sectionTitle}>LLM Provider</h3>
@@ -1507,8 +1429,7 @@ function SettingsPage() {
             </div>
           </div>
         </div>
-      </div>
-    </>
+      </>
   );
 }
 
