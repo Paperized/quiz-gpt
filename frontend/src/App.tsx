@@ -1114,6 +1114,36 @@ function SettingsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activeSection, setActiveSection] = useState('llm');
+
+  const sections = [
+    { id: 'llm', label: 'LLM Provider' },
+    { id: 'embedding', label: 'Embedding & Advanced' },
+    { id: 'ratelimit', label: 'Rate Limiting' },
+    { id: 'security', label: 'Security' },
+  ];
+
+  useEffect(() => {
+    const observers: IntersectionObserver[] = [];
+    const visibleRatios: Record<string, number> = {};
+    sections.forEach(({ id }) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const obs = new IntersectionObserver(
+        ([entry]) => {
+          visibleRatios[id] = entry.intersectionRatio;
+          const best = sections.map((s) => s.id).reduce((a, b) =>
+            (visibleRatios[a] ?? 0) >= (visibleRatios[b] ?? 0) ? a : b
+          );
+          setActiveSection(best);
+        },
+        { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1], rootMargin: '-10% 0px -60% 0px' }
+      );
+      obs.observe(el);
+      observers.push(obs);
+    });
+    return () => observers.forEach((o) => o.disconnect());
+  }, [display]);
 
   // Form state
   const [llmApiStyle, setLlmApiStyle] = useState('openai_compatible');
@@ -1268,7 +1298,32 @@ function SettingsPage() {
             <div className="mb-6 bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{saveError}</div>
           )}
 
-          <div className="space-y-8 pb-24">
+          <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-8 items-start">
+            {/* In-page nav */}
+            <nav className="hidden md:block sticky top-8">
+              <ul className="space-y-1">
+                {sections.map(({ id, label }) => {
+                  const isActive = activeSection === id;
+                  return (
+                    <li key={id}>
+                      <button
+                        onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
+                        className={`w-full text-left block px-3 py-2 text-[12px] rounded transition-colors font-geist border-l-2 ${
+                          isActive
+                            ? 'border-secondary bg-surface-container text-on-surface font-medium'
+                            : 'border-transparent text-text-muted hover:text-on-surface hover:bg-surface-variant'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+
+            {/* Forms */}
+            <div className="space-y-8 pb-24">
               {/* LLM */}
               <section id="llm" className={section}>
                 <h3 className={sectionTitle}>LLM Provider</h3>
@@ -1429,6 +1484,7 @@ function SettingsPage() {
             </div>
           </div>
         </div>
+      </div>
       </>
   );
 }
