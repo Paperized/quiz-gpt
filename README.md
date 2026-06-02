@@ -169,22 +169,22 @@ All active share links and their attempt counts are visible under **Shares** in 
 
 ### Basic Auth (built-in)
 
-Set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` in `.env` to protect the entire admin interface. Basic Auth is enforced only on `/api/*` routes (excluding the public share paths listed below) and does not interfere with shared quiz links.
+Set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` in `.env` to protect the entire admin interface. Basic Auth is enforced only on `/api/*` routes and does not interfere with shared quiz links, which live under `/public/*`.
 
 ### Forward Auth with an external auth manager
 
-If you use an auth manager (Authelia, Authentik, Keycloak, etc.) in front of QuizGPT via a reverse proxy, configure it to **bypass authentication** for the following paths so that shared quiz links remain accessible to guests without an account:
+If you use an auth manager (Authelia, Authentik, Keycloak, etc.) in front of QuizGPT via a reverse proxy, configure it to **bypass authentication** for the following paths:
 
 | Path pattern | Purpose |
 |---|---|
-| `/public/*` | Guest quiz pages (frontend SPA routes) |
-| `/api/public/*` | Guest API: fetch quiz data, submit attempt |
-| `/config.js` | Runtime config injected into the frontend |
-| `/api/health` | Health check |
+| `/public/*` | All guest-facing paths: quiz pages (frontend) and quiz API (backend under `/public/api/*`) |
 | `/assets/*` | Static JS/CSS bundles |
+| `/config.js` | Runtime config injected into the frontend |
 | `/favicon*` | Favicons |
 
 All other paths — especially `/api/*` — should remain behind authentication.
+
+The public area is intentionally centralised under `/public/`: the guest quiz frontend routes live at `/public/s/:token` and the corresponding backend endpoints at `/public/api/s/:token`, so a single prefix rule is enough.
 
 Example rule for Authelia:
 
@@ -193,10 +193,8 @@ Example rule for Authelia:
   policy: bypass
   resources:
     - "^/public/.*$"
-    - "^/api/public/.*$"
-    - "^/config\\.js$"
-    - "^/api/health$"
     - "^/assets/.*$"
+    - "^/config\\.js$"
     - "^/favicon.*$"
 ```
 

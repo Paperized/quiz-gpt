@@ -21,7 +21,7 @@ export function GuestQuizPage() {
   const [singleIndex, setSingleIndex] = useState(0);
 
   useEffect(() => {
-    req<GuestQuizData>(`/api/public/s/${token}`)
+    req<GuestQuizData>(`/public/api/s/${token}`)
       .then((data) => { setQuizData(data); setPhase('intro'); })
       .catch((e) => { setErrorMsg(e instanceof Error ? e.message : 'Failed to load quiz'); setPhase('error'); });
   }, [token]);
@@ -38,7 +38,7 @@ export function GuestQuizPage() {
     setSubmitting(true);
     try {
       const answersArr = quizData.questions.map((_, i) => answers[i] ?? -1);
-      const res = await req<GuestAttemptResult>(`/api/public/s/${token}/attempt`, {
+      const res = await req<GuestAttemptResult>(`/public/api/s/${token}/attempt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ answers: answersArr, startedAt, completedAt: new Date().toISOString() }),

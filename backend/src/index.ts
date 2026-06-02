@@ -72,8 +72,8 @@ function safeCompare(a: string, b: string): boolean {
 
 app.use((req, res, next) => {
   if (!hasBasicAuth()) return next();
-  // Only protect API routes; public API and all static assets are open
-  if (!req.path.startsWith('/api/') || req.path.startsWith('/api/public/') || req.path === '/api/health') {
+  // Only protect /api/* routes; /public/* and static assets are always open
+  if (!req.path.startsWith('/api/') || req.path === '/api/health') {
     return next();
   }
 
@@ -600,7 +600,7 @@ app.delete('/api/shares/:shareId', asyncRoute(async (req, res) => {
 
 // ─── Public guest routes (no auth) ───────────────────────────────────────────
 
-app.get('/api/public/s/:token', asyncRoute(async (req, res) => {
+app.get('/public/api/s/:token', asyncRoute(async (req, res) => {
   const { token } = req.params;
   const { rows } = await pool.query(`
     SELECT s.id, s.quiz_id, s.guest_name, s.max_attempts, s.expires_at,
@@ -637,7 +637,7 @@ app.get('/api/public/s/:token', asyncRoute(async (req, res) => {
   });
 }));
 
-app.post('/api/public/s/:token/attempt', asyncRoute(async (req, res) => {
+app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
   const { token } = req.params;
 
   // Validate body before acquiring the transaction lock
