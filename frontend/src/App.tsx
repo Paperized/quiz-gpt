@@ -172,10 +172,12 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       <div className="flex flex-col h-full overflow-y-auto">
         {/* Header */}
         <div className="px-6 py-6 flex items-center gap-3 border-b border-border-subtle/50">
-          <div className="w-8 h-8 rounded bg-primary-container flex items-center justify-center">
-            <Icon name="lightbulb" fill size={18} className="text-secondary" />
-          </div>
-          <h1 className="text-[18px] font-bold text-on-surface font-geist tracking-tight">QuizGPT</h1>
+          <button onClick={() => navigate('/')} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+            <div className="w-8 h-8 rounded bg-primary-container flex items-center justify-center">
+              <Icon name="lightbulb" fill size={18} className="text-secondary" />
+            </div>
+            <h1 className="text-[18px] font-bold text-on-surface font-geist tracking-tight">QuizGPT</h1>
+          </button>
         </div>
 
         {/* New Quiz */}
@@ -283,6 +285,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 function Layout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const navigate = useNavigate();
 
   return (
     <div style={{ backgroundColor: '#141313' }} className="text-on-surface antialiased flex h-screen overflow-hidden">
@@ -293,10 +296,10 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 md:ml-[280px] flex flex-col h-screen overflow-hidden">
         {/* Mobile header */}
         <header className="md:hidden flex items-center justify-between p-4 border-b border-border-subtle sticky top-0 z-40" style={{ backgroundColor: '#141313' }}>
-          <div className="flex items-center gap-2">
-            <Icon name="lightbulb" fill size={18} className="text-secondary" />
-            <span className="text-[18px] font-bold text-on-surface font-geist">QuizGPT</span>
-          </div>
+          <button onClick={() => navigate('/')} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+              <Icon name="lightbulb" fill size={18} className="text-secondary" />
+              <span className="text-[18px] font-bold text-on-surface font-geist">QuizGPT</span>
+            </button>
           <button onClick={() => setSidebarOpen(true)} className="text-on-surface">
             <Icon name="menu" size={24} />
           </button>
