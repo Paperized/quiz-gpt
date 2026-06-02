@@ -1329,16 +1329,16 @@ function SettingsPage() {
                   const isActive = activeSection === id;
                   return (
                     <li key={id}>
-                      <a
-                        href={`#${id}`}
-                        className={`block px-3 py-2 text-[12px] rounded transition-colors font-geist border-l-2 ${
+                    <button
+                        onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
+                        className={`w-full text-left block px-3 py-2 text-[12px] rounded transition-colors font-geist border-l-2 ${
                           isActive
                             ? 'border-secondary bg-surface-container text-on-surface font-medium'
                             : 'border-transparent text-text-muted hover:text-on-surface hover:bg-surface-variant'
                         }`}
                       >
                         {label}
-                      </a>
+                      </button>
                     </li>
                   );
                 })}
