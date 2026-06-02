@@ -1,0 +1,25 @@
+# Dev-only Dockerfile: skips frontend build stage (uses pre-built ./backend/public from host).
+# Frontend must be built locally first: npm run build --workspace frontend
+
+FROM node:22-alpine AS build-backend
+WORKDIR /app
+COPY package*.json ./
+COPY frontend/package*.json frontend/
+COPY backend/package*.json backend/
+RUN npm install
+COPY backend/ backend/
+RUN npm run build --workspace backend
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --chown=node:node package*.json ./
+COPY --chown=node:node backend/package*.json backend/
+RUN npm install --omit=dev --workspace backend
+COPY --chown=node:node --from=build-backend /app/backend/dist backend/dist
+# Use pre-built frontend assets from the host (built via npm run build --workspace frontend)
+COPY --chown=node:node backend/public backend/public
+COPY --chown=node:node --from=build-backend /app/backend/migrations backend/migrations
+EXPOSE 3000
+USER node
+CMD ["npm", "run", "start", "--workspace", "backend"]

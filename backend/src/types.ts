@@ -35,4 +35,18 @@ export interface Attempt {
   total: number;
   startedAt: string;
   completedAt: string;
+  guestName?: string | null;
+  shareId?: string | null;
+}
+
+export interface QuizShare {
+  id: string;
+  quizId: string;
+  quizTitle?: string;
+  token: string;
+  guestName: string;
+  maxAttempts: number | null;
+  expiresAt: string | null;
+  createdAt: string;
+  attemptCount: number;
 }

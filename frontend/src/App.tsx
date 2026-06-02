@@ -39,6 +39,51 @@ type AttemptHistory = {
   startedAt: string;
   completedAt: string;
   timeTakenSeconds: number;
+  guestName: string | null;
+};
+
+type QuizShare = {
+  id: string;
+  quizId: string;
+  quizTitle?: string;
+  token: string;
+  guestName: string;
+  maxAttempts: number | null;
+  expiresAt: string | null;
+  createdAt: string;
+  attemptCount: number;
+};
+
+// Public (guest) quiz types — questions without correctIndex/explanation
+type PublicQuestion = {
+  question: string;
+  choices: string[];
+};
+
+type GuestQuizData = {
+  shareId: string;
+  quizId: string;
+  title: string;
+  guestName: string;
+  maxAttempts: number | null;
+  attemptCount: number;
+  questions: PublicQuestion[];
+};
+
+type GuestAttemptResult = {
+  id: string;
+  quizId: string;
+  score: number;
+  total: number;
+  startedAt: string;
+  completedAt: string;
+  questions: Array<{
+    question: string;
+    choices: string[];
+    correctIndex: number;
+    explanation?: string;
+    userAnswer: number;
+  }>;
 };
 
 type Metrics = {
@@ -140,6 +185,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 
   const isResults = location.pathname === '/results';
+  const isShares = location.pathname === '/shares';
   const activeQuizId = location.pathname.startsWith('/quiz/') ? location.pathname.split('/')[2] : null;
 
   async function togglePin(quiz: Quiz, e: React.MouseEvent) {
@@ -202,6 +248,15 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
               >
                 <Icon name="bar_chart" size={18} className={isResults ? 'text-secondary' : ''} />
                 <span className="text-[12px] font-medium">Results & Metrics</span>
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { navigate('/shares'); onClose(); }}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors duration-200 ${isShares ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+              >
+                <Icon name="link" size={18} className={isShares ? 'text-secondary' : ''} />
+                <span className="text-[12px] font-medium">Shares</span>
               </button>
             </li>
           </ul>
@@ -545,6 +600,163 @@ function CreateQuizPage() {
   );
 }
 
+// ─── Share Dialog ─────────────────────────────────────────────────────────────
+
+function ShareDialog({ quizId, onClose }: { quizId: string; onClose: () => void }) {
+  const [guestName, setGuestName] = useState('');
+  const [maxAttempts, setMaxAttempts] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<QuizShare | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function create() {
+    if (!guestName.trim()) { setError('Guest name is required'); return; }
+    setLoading(true); setError(null);
+    try {
+      const body: Record<string, unknown> = { guestName: guestName.trim() };
+      if (maxAttempts.trim()) body.maxAttempts = parseInt(maxAttempts, 10);
+      if (expiresAt.trim()) body.expiresAt = new Date(expiresAt).toISOString();
+      const share = await req<QuizShare>(`/api/quizzes/${quizId}/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      setCreated(share);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create share link');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const shareUrl = created
+    ? `${(window.__APP_CONFIG__?.publicUrl ?? '').replace(/\/$/, '')}/public/s/${created.token}`
+    : '';
+
+  function copy() {
+    void navigator.clipboard.writeText(shareUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div
+        className="relative w-full md:max-w-md bg-surface-container rounded-t-2xl md:rounded-2xl border border-border-subtle shadow-2xl p-6 flex flex-col gap-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Icon name="share" size={20} className="text-secondary" />
+            <h2 className="text-[16px] font-semibold text-on-surface font-geist">Share Quiz</h2>
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-on-surface transition-colors">
+            <Icon name="close" size={20} />
+          </button>
+        </div>
+
+        {!created ? (
+          <>
+            <div className="flex flex-col gap-4">
+              {/* Guest Name */}
+              <div className="space-y-1.5">
+                <label className="block text-[12px] font-medium text-on-surface font-geist">Guest Name <span className="text-error">*</span></label>
+                <input
+                  className="w-full bg-[#0D0D0D] border border-border-subtle rounded px-3 py-2 text-[14px] text-on-surface focus:outline-none focus:border-accent-teal transition-colors"
+                  placeholder="e.g. John Doe"
+                  value={guestName}
+                  onChange={(e) => setGuestName(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              {/* Max Attempts */}
+              <div className="space-y-1.5">
+                <label className="block text-[12px] font-medium text-on-surface font-geist">Max Attempts <span className="text-text-muted font-normal">(optional)</span></label>
+                <input
+                  type="number"
+                  min={1}
+                  className="w-full bg-[#0D0D0D] border border-border-subtle rounded px-3 py-2 text-[14px] text-on-surface focus:outline-none focus:border-accent-teal transition-colors"
+                  placeholder="Unlimited"
+                  value={maxAttempts}
+                  onChange={(e) => setMaxAttempts(e.target.value)}
+                />
+              </div>
+
+              {/* Expiry */}
+              <div className="space-y-1.5">
+                <label className="block text-[12px] font-medium text-on-surface font-geist">Expires At <span className="text-text-muted font-normal">(optional)</span></label>
+                <input
+                  type="datetime-local"
+                  className="w-full bg-[#0D0D0D] border border-border-subtle rounded px-3 py-2 text-[14px] text-on-surface focus:outline-none focus:border-accent-teal transition-colors"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {error && <div className="bg-error-container border border-error/30 rounded-lg p-3 text-[13px] text-on-error-container">{error}</div>}
+
+            <div className="flex gap-3 justify-end">
+              <button onClick={onClose} className="px-4 py-2 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={() => void create()}
+                disabled={loading || !guestName.trim()}
+                className="px-4 py-2 bg-secondary hover:opacity-90 disabled:opacity-50 text-on-secondary-fixed rounded text-[12px] font-medium transition-colors flex items-center gap-2"
+              >
+                {loading && <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>}
+                Generate Link
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-2">
+              <p className="text-[13px] text-text-muted">Share link created for <span className="text-on-surface font-medium">{created.guestName}</span></p>
+              <div className="flex items-center gap-2 bg-[#0D0D0D] border border-border-subtle rounded px-3 py-2">
+                <span className="flex-1 text-[12px] text-secondary truncate font-mono">{shareUrl}</span>
+                <button
+                  onClick={copy}
+                  className="shrink-0 text-text-muted hover:text-secondary transition-colors"
+                  title="Copy link"
+                >
+                  <Icon name={copied ? 'check' : 'content_copy'} size={18} className={copied ? 'text-success' : ''} />
+                </button>
+              </div>
+              {created.maxAttempts !== null && (
+                <p className="text-[11px] text-text-muted">Max attempts: {created.maxAttempts}</p>
+              )}
+              {created.expiresAt && (
+                <p className="text-[11px] text-text-muted">Expires: {new Date(created.expiresAt).toLocaleString()}</p>
+              )}
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={copy}
+                className="px-4 py-2 border border-border-subtle rounded text-[12px] text-text-muted hover:text-secondary hover:border-secondary transition-colors flex items-center gap-2"
+              >
+                <Icon name={copied ? 'check' : 'content_copy'} size={16} />
+                {copied ? 'Copied!' : 'Copy Link'}
+              </button>
+              <button onClick={onClose} className="px-4 py-2 bg-surface-variant rounded text-[12px] text-on-surface hover:opacity-90 transition-colors">
+                Done
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Quiz Page (/quiz/:id) ────────────────────────────────────────────────────
 
 function QuizPage() {
@@ -559,6 +771,7 @@ function QuizPage() {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'one'>(() => (localStorage.getItem('viewMode') as 'all' | 'one') ?? 'all');
   const [singleIndex, setSingleIndex] = useState(0);
+  const [showShare, setShowShare] = useState(false);
 
   useEffect(() => { setLocalQuizzes(quizzes); }, [quizzes]);
   useEffect(() => { localStorage.setItem('viewMode', viewMode); }, [viewMode]);
@@ -614,6 +827,7 @@ function QuizPage() {
 
   return (
     <>
+      {showShare && <ShareDialog quizId={quiz.id} onClose={() => setShowShare(false)} />}
       {/* Topbar */}
       <header className="relative flex justify-between items-center h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
         <span className="text-[14px] font-semibold text-on-surface font-geist truncate">{quiz.title}</span>
@@ -630,6 +844,9 @@ function QuizPage() {
           </button>
           <button onClick={togglePin} className="w-8 h-8 flex items-center justify-center rounded text-text-muted hover:text-secondary hover:bg-surface-variant transition-colors">
             <Icon name="push_pin" size={20} fill={quiz.pinned} />
+          </button>
+          <button onClick={() => setShowShare(true)} className="w-8 h-8 flex items-center justify-center rounded text-text-muted hover:text-secondary hover:bg-surface-variant transition-colors" title="Share">
+            <Icon name="share" size={20} />
           </button>
           <div className="w-px h-6 bg-border-subtle" />
           <button onClick={retake} className="px-4 py-1.5 rounded border border-border-subtle text-text-muted hover:text-secondary hover:border-secondary transition-colors text-[12px] font-medium">
@@ -742,23 +959,22 @@ function QuizPage() {
 
 function ResultsPage() {
   const navigate = useNavigate();
-  const [history, setHistory] = useState<AttemptHistory[]>([]);
+  const [allHistory, setAllHistory] = useState<AttemptHistory[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [resultsTab, setResultsTab] = useState<'history' | 'metrics'>('history');
   const [resultsError, setResultsError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [trendQuizId, setTrendQuizId] = useState('');
+  const [userFilter, setUserFilter] = useState<string>(''); // '' = all, '__you__' = admin, '<name>' = guest
 
   async function load() {
     setResultsError(null);
-    const params = new URLSearchParams();
-    if (search) params.set('quizName', search);
     try {
       const [h, m] = await Promise.all([
-        req<AttemptHistory[]>(`/api/results/history?${params.toString()}`),
+        req<AttemptHistory[]>('/api/results/history'),
         req<Metrics>('/api/results/metrics'),
       ]);
-      setHistory(h);
+      setAllHistory(h);
       setMetrics(m);
     } catch (e) {
       setResultsError(e instanceof Error ? e.message : 'Failed to load results');
@@ -767,21 +983,104 @@ function ResultsPage() {
 
   useEffect(() => { void load(); }, []);
 
-  useEffect(() => {
-    if (!metrics) return;
-    const ids = Object.keys(metrics.trendByQuiz);
-    if (ids.length && !ids.includes(trendQuizId)) setTrendQuizId(ids[0]);
-  }, [metrics]);
+  // Distinct users from history
+  const users = useMemo(() => {
+    const names = new Set<string>();
+    for (const h of allHistory) {
+      names.add(h.guestName ?? '__you__');
+    }
+    return Array.from(names).sort((a, b) => {
+      if (a === '__you__') return -1;
+      if (b === '__you__') return 1;
+      return a.localeCompare(b);
+    });
+  }, [allHistory]);
 
-  const trendPoints = trendQuizId && metrics?.trendByQuiz[trendQuizId]?.points;
+  // Filtered history
+  const history = useMemo(() => {
+    let h = allHistory;
+    if (userFilter === '__you__') h = h.filter((x) => x.guestName === null);
+    else if (userFilter) h = h.filter((x) => x.guestName === userFilter);
+    if (search) h = h.filter((x) => x.quizTitle.toLowerCase().includes(search.toLowerCase()));
+    return h;
+  }, [allHistory, userFilter, search]);
+
+  // Filtered metrics (derived client-side from filtered history)
+  const filteredMetrics = useMemo((): Metrics | null => {
+    if (!metrics) return null;
+    if (!userFilter) return metrics; // no filter → use backend metrics
+
+    const totalAttempts = history.length;
+    const percentages = history.map((h) => h.total ? (h.score / h.total) * 100 : 0);
+    const averageScore = percentages.length ? percentages.reduce((s, p) => s + p, 0) / percentages.length : 0;
+
+    const bestByQuiz = new Map<string, number>();
+    const countByQuiz = new Map<string, number>();
+    const trendByQuiz = new Map<string, { quizTitle: string; points: Array<{ completedAt: string; scorePercent: number }> }>();
+
+    for (const h of history) {
+      const pct = h.total ? (h.score / h.total) * 100 : 0;
+      bestByQuiz.set(h.quizId, Math.max(bestByQuiz.get(h.quizId) ?? 0, pct));
+      countByQuiz.set(h.quizId, (countByQuiz.get(h.quizId) ?? 0) + 1);
+      const trend = trendByQuiz.get(h.quizId) ?? { quizTitle: h.quizTitle, points: [] };
+      trend.points.push({ completedAt: h.completedAt, scorePercent: pct });
+      trendByQuiz.set(h.quizId, trend);
+    }
+
+    const bestScorePerQuiz = Array.from(bestByQuiz.entries()).map(([quizId, bestScore]) => ({
+      quizId, quizTitle: history.find((h) => h.quizId === quizId)?.quizTitle ?? 'Unknown', bestScore
+    }));
+    const mostAttempted = Array.from(countByQuiz.entries()).sort((a, b) => b[1] - a[1])[0];
+
+    return {
+      totalQuizzes: metrics.totalQuizzes,
+      totalAttempts,
+      averageScore,
+      bestScorePerQuiz,
+      mostAttemptedQuiz: mostAttempted
+        ? { quizId: mostAttempted[0], quizTitle: history.find((h) => h.quizId === mostAttempted[0])?.quizTitle ?? 'Unknown', attempts: mostAttempted[1] }
+        : null,
+      trendByQuiz: Object.fromEntries(trendByQuiz.entries()),
+    };
+  }, [metrics, history, userFilter]);
+
+  useEffect(() => {
+    if (!filteredMetrics) return;
+    const ids = Object.keys(filteredMetrics.trendByQuiz);
+    if (ids.length && !ids.includes(trendQuizId)) setTrendQuizId(ids[0]);
+  }, [filteredMetrics]);
+
+  const trendPoints = trendQuizId && filteredMetrics?.trendByQuiz[trendQuizId]?.points;
+
+  function userLabel(u: string) {
+    return u === '__you__' ? 'You' : u;
+  }
 
   return (
     <>
       <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
         <h2 className="text-[14px] font-semibold text-on-surface font-geist">Results & Metrics</h2>
-        <button onClick={() => void load()} className="flex items-center gap-2 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-secondary hover:border-secondary transition-colors bg-surface-container-low">
-          <Icon name="refresh" size={16} /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {/* User filter dropdown */}
+          {users.length > 0 && (
+            <div className="relative">
+              <select
+                value={userFilter}
+                onChange={(e) => setUserFilter(e.target.value)}
+                className="appearance-none bg-surface-container-low border border-border-subtle rounded px-3 py-1.5 pr-7 text-[12px] text-on-surface focus:outline-none focus:border-secondary transition-colors"
+              >
+                <option value="">All Users</option>
+                {users.map((u) => (
+                  <option key={u} value={u}>{userLabel(u)}</option>
+                ))}
+              </select>
+              <Icon name="expand_more" size={16} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+            </div>
+          )}
+          <button onClick={() => void load()} className="flex items-center gap-2 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-secondary hover:border-secondary transition-colors bg-surface-container-low">
+            <Icon name="refresh" size={16} /> Refresh
+          </button>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto p-6" style={{ backgroundColor: '#141313' }}>
@@ -817,8 +1116,9 @@ function ResultsPage() {
 
               <div className="border border-border-subtle rounded-lg bg-surface-container-low overflow-hidden">
                 <div className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle bg-surface-variant/50 text-[12px] font-medium text-text-muted">
-                  <div className="col-span-5">Quiz Name</div>
-                  <div className="col-span-3 hidden sm:block">Date</div>
+                  <div className="col-span-4">Quiz Name</div>
+                  <div className="col-span-2 hidden sm:block">User</div>
+                  <div className="col-span-2 hidden sm:block">Date</div>
                   <div className="col-span-2">Score</div>
                   <div className="col-span-2 text-right">Time</div>
                 </div>
@@ -828,11 +1128,21 @@ function ResultsPage() {
                   const pct = Math.round((h.score / h.total) * 100);
                   return (
                     <div key={h.id} onClick={() => navigate(`/review/${h.id}`)} className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle hover:bg-surface-variant/30 transition-colors items-center last:border-b-0 cursor-pointer group">
-                      <div className="col-span-5 flex flex-col">
+                      <div className="col-span-4 flex flex-col">
                         <span className="text-[14px] text-on-surface font-medium group-hover:text-accent-teal transition-colors">{h.quizTitle}</span>
                         <span className="text-[12px] text-text-muted">{h.score}/{h.total} questions</span>
                       </div>
-                      <div className="col-span-3 hidden sm:block text-[14px] text-text-muted">{new Date(h.completedAt).toLocaleDateString()}</div>
+                      <div className="col-span-2 hidden sm:flex items-center gap-1.5">
+                        {h.guestName ? (
+                          <>
+                            <Icon name="person" size={14} className="text-text-muted shrink-0" />
+                            <span className="text-[13px] text-text-muted truncate">{h.guestName}</span>
+                          </>
+                        ) : (
+                          <span className="text-[13px] text-secondary font-medium">You</span>
+                        )}
+                      </div>
+                      <div className="col-span-2 hidden sm:block text-[14px] text-text-muted">{new Date(h.completedAt).toLocaleDateString()}</div>
                       <div className="col-span-2 flex items-center gap-2">
                         <span className={`text-[14px] font-medium ${scoreColor(pct)}`}>{pct}%</span>
                         <div className="w-12 h-1.5 bg-surface-bright rounded-full hidden lg:block overflow-hidden">
@@ -852,16 +1162,16 @@ function ResultsPage() {
           {/* Metrics */}
           {resultsTab === 'metrics' && (
             <div className="flex flex-col gap-6">
-              {!metrics ? (
+              {!filteredMetrics ? (
                 <div className="p-8 text-center text-text-muted text-[14px]">Loading metrics...</div>
               ) : (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     {[
-                      { label: 'Total Quizzes', value: metrics.totalQuizzes, icon: 'library_books', sub: null },
-                      { label: 'Total Attempts', value: metrics.totalAttempts, icon: 'repeat', sub: `Avg ${(metrics.totalAttempts / Math.max(metrics.totalQuizzes, 1)).toFixed(1)} per quiz` },
-                      { label: 'Avg Score', value: `${metrics.averageScore.toFixed(1)}%`, icon: 'analytics', sub: null },
-                      { label: 'Most Attempted', value: metrics.mostAttemptedQuiz?.quizTitle ?? '-', icon: 'local_fire_department', sub: metrics.mostAttemptedQuiz ? `${metrics.mostAttemptedQuiz.attempts} attempts` : null },
+                      { label: 'Total Quizzes', value: filteredMetrics.totalQuizzes, icon: 'library_books', sub: null },
+                      { label: 'Total Attempts', value: filteredMetrics.totalAttempts, icon: 'repeat', sub: `Avg ${(filteredMetrics.totalAttempts / Math.max(filteredMetrics.totalQuizzes, 1)).toFixed(1)} per quiz` },
+                      { label: 'Avg Score', value: `${filteredMetrics.averageScore.toFixed(1)}%`, icon: 'analytics', sub: null },
+                      { label: 'Most Attempted', value: filteredMetrics.mostAttemptedQuiz?.quizTitle ?? '-', icon: 'local_fire_department', sub: filteredMetrics.mostAttemptedQuiz ? `${filteredMetrics.mostAttemptedQuiz.attempts} attempts` : null },
                     ].map((card) => (
                       <div key={card.label} className="border border-border-subtle rounded-lg bg-surface-container-low p-6 flex flex-col gap-2">
                         <div className="flex items-center justify-between">
@@ -879,7 +1189,7 @@ function ResultsPage() {
                       <div className="flex items-center justify-between mb-6">
                         <h3 className="text-[18px] font-medium text-on-surface font-geist">Performance Trend</h3>
                         <select className="bg-surface-dim border border-border-subtle rounded px-3 py-1.5 text-[12px] text-on-surface focus:outline-none" value={trendQuizId} onChange={(e) => setTrendQuizId(e.target.value)}>
-                          {Object.entries(metrics.trendByQuiz).map(([id, t]) => <option key={id} value={id}>{t.quizTitle}</option>)}
+                          {Object.entries(filteredMetrics.trendByQuiz).map(([id, t]) => <option key={id} value={id}>{t.quizTitle}</option>)}
                         </select>
                       </div>
                       <div className="relative w-full h-48 border-l border-b border-border-subtle">
@@ -898,12 +1208,12 @@ function ResultsPage() {
                     </div>
                   )}
 
-                  {metrics.bestScorePerQuiz.length > 0 && (
+                  {filteredMetrics.bestScorePerQuiz.length > 0 && (
                     <div className="border border-border-subtle rounded-lg bg-surface-container-low overflow-hidden">
                       <div className="p-4 border-b border-border-subtle">
                         <h3 className="text-[14px] font-medium text-on-surface font-geist">Best Score per Quiz</h3>
                       </div>
-                      {metrics.bestScorePerQuiz.map((b) => (
+                      {filteredMetrics.bestScorePerQuiz.map((b) => (
                         <div key={b.quizId} className="flex items-center justify-between p-4 border-b border-border-subtle last:border-b-0 hover:bg-surface-variant/20 transition-colors">
                           <span className="text-[14px] text-on-surface">{b.quizTitle}</span>
                           <div className="flex items-center gap-3">
@@ -1048,6 +1358,138 @@ function ReviewPage() {
           </div>
         </div>
       </main>
+    </>
+  );
+}
+
+// ─── Shares Page (/shares) ────────────────────────────────────────────────────
+
+function SharesPage() {
+  const [shares, setShares] = useState<QuizShare[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const data = await req<QuizShare[]>('/api/shares');
+      setShares(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load shares');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteShare(id: string) {
+    if (!confirm('Delete this share link?')) return;
+    await req<void>(`/api/shares/${id}`, { method: 'DELETE' });
+    await load();
+  }
+
+  function copyLink(share: QuizShare) {
+    const url = `${(window.__APP_CONFIG__?.publicUrl ?? '').replace(/\/$/, '')}/public/s/${share.token}`;
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopiedId(share.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }
+
+  useEffect(() => { void load(); }, []);
+
+  function attemptsLabel(share: QuizShare) {
+    if (share.maxAttempts === null) return `${share.attemptCount} / ∞`;
+    return `${share.attemptCount} / ${share.maxAttempts}`;
+  }
+
+  function expiryLabel(share: QuizShare) {
+    if (!share.expiresAt) return '—';
+    const d = new Date(share.expiresAt);
+    const expired = d < new Date();
+    return (
+      <span className={expired ? 'text-error' : 'text-text-muted'}>
+        {d.toLocaleDateString()}{expired ? ' (expired)' : ''}
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
+        <h2 className="text-[14px] font-semibold text-on-surface font-geist">Shares</h2>
+        <button onClick={() => void load()} className="flex items-center gap-2 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-secondary hover:border-secondary transition-colors bg-surface-container-low">
+          <Icon name="refresh" size={16} /> Refresh
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-6" style={{ backgroundColor: '#141313' }}>
+        <div className="max-w-[1200px] mx-auto w-full flex flex-col gap-6">
+          {error && <div className="bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{error}</div>}
+
+          <div className="border border-border-subtle rounded-lg bg-surface-container-low overflow-hidden">
+            {/* Table header */}
+            <div className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle bg-surface-variant/50 text-[12px] font-medium text-text-muted">
+              <div className="col-span-3">Quiz</div>
+              <div className="col-span-2">Guest</div>
+              <div className="col-span-3">Link</div>
+              <div className="col-span-1 text-center">Attempts</div>
+              <div className="col-span-2 hidden md:block">Expires</div>
+              <div className="col-span-1 text-right">Actions</div>
+            </div>
+
+            {loading ? (
+              <div className="p-8 text-center text-text-muted text-[14px]">Loading...</div>
+            ) : shares.length === 0 ? (
+              <div className="p-8 text-center">
+                <Icon name="link_off" size={32} className="text-text-muted mx-auto mb-3" />
+                <p className="text-text-muted text-[14px]">No share links yet.</p>
+                <p className="text-[12px] text-text-muted mt-1">Open a quiz and click the share icon to create one.</p>
+              </div>
+            ) : shares.map((share) => {
+              const isExhausted = share.maxAttempts !== null && share.attemptCount >= share.maxAttempts;
+              const isExpired = share.expiresAt ? new Date(share.expiresAt) < new Date() : false;
+              const inactive = isExhausted || isExpired;
+
+              return (
+                <div key={share.id} className={`grid grid-cols-12 gap-4 p-4 border-b border-border-subtle last:border-b-0 items-center transition-colors ${inactive ? 'opacity-50' : 'hover:bg-surface-variant/20'}`}>
+                  <div className="col-span-3 flex flex-col min-w-0">
+                    <span className="text-[13px] text-on-surface font-medium truncate">{share.quizTitle ?? '—'}</span>
+                    <span className="text-[11px] text-text-muted">{new Date(share.createdAt).toLocaleDateString()}</span>
+                  </div>
+                  <div className="col-span-2 flex items-center gap-1.5 min-w-0">
+                    <Icon name="person" size={14} className="text-text-muted shrink-0" />
+                    <span className="text-[13px] text-on-surface truncate">{share.guestName}</span>
+                  </div>
+                  <div className="col-span-3 min-w-0">
+                    <button
+                      onClick={() => copyLink(share)}
+                      className="flex items-center gap-1.5 text-secondary hover:opacity-80 transition-opacity max-w-full"
+                      title="Copy link"
+                    >
+                      <Icon name={copiedId === share.id ? 'check' : 'content_copy'} size={14} className={copiedId === share.id ? 'text-success shrink-0' : 'shrink-0'} />
+                      <span className="text-[12px] font-mono truncate">{share.token.slice(0, 12)}…</span>
+                    </button>
+                  </div>
+                  <div className="col-span-1 text-center">
+                    <span className={`text-[12px] font-medium ${isExhausted ? 'text-error' : 'text-text-muted'}`}>{attemptsLabel(share)}</span>
+                  </div>
+                  <div className="col-span-2 hidden md:block text-[12px]">{expiryLabel(share)}</div>
+                  <div className="col-span-1 flex justify-end">
+                    <button
+                      onClick={() => void deleteShare(share.id)}
+                      className="text-text-muted hover:text-error transition-colors p-1"
+                      title="Delete share"
+                    >
+                      <Icon name="delete" size={16} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </>
   );
 }
@@ -1489,9 +1931,325 @@ function SettingsPage() {
   );
 }
 
+// ─── Guest Quiz Page (/public/s/:token) ──────────────────────────────────────
+// Fullscreen, no sidebar, no auth
+
+function GuestQuizPage() {
+  const { token } = useParams<{ token: string }>();
+  const [quizData, setQuizData] = useState<GuestQuizData | null>(null);
+  const [phase, setPhase] = useState<'loading' | 'error' | 'intro' | 'quiz' | 'result'>('loading');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [startedAt, setStartedAt] = useState('');
+  const [result, setResult] = useState<GuestAttemptResult | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [viewMode, setViewMode] = useState<'all' | 'one'>('all');
+  const [singleIndex, setSingleIndex] = useState(0);
+
+  useEffect(() => {
+    req<GuestQuizData>(`/api/public/s/${token}`)
+      .then((data) => { setQuizData(data); setPhase('intro'); })
+      .catch((e) => { setErrorMsg(e instanceof Error ? e.message : 'Failed to load quiz'); setPhase('error'); });
+  }, [token]);
+
+  function startQuiz() {
+    setStartedAt(new Date().toISOString());
+    setAnswers({});
+    setSingleIndex(0);
+    setPhase('quiz');
+  }
+
+  async function submit() {
+    if (!quizData) return;
+    setSubmitting(true);
+    try {
+      const answersArr = quizData.questions.map((_, i) => answers[i] ?? -1);
+      const res = await req<GuestAttemptResult>(`/api/public/s/${token}/attempt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: answersArr, startedAt, completedAt: new Date().toISOString() }),
+      });
+      setResult(res);
+      setPhase('result');
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'Failed to submit');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const bg = '#141313';
+  const cardBg = '#1c1b1b';
+
+  if (phase === 'loading') return (
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: bg }}>
+      <svg className="animate-spin w-8 h-8 text-secondary" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+        <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+    </div>
+  );
+
+  if (phase === 'error') return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: bg }}>
+      <div className="max-w-sm w-full text-center space-y-4">
+        <Icon name="link_off" size={48} className="text-text-muted mx-auto" />
+        <h2 className="text-[20px] font-bold text-on-surface font-geist">Link Unavailable</h2>
+        <p className="text-[14px] text-text-muted">{errorMsg}</p>
+      </div>
+    </div>
+  );
+
+  if (phase === 'intro' && quizData) return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ backgroundColor: bg }}>
+      <div className="max-w-md w-full space-y-6">
+        <div className="text-center space-y-2">
+          <div className="w-14 h-14 rounded-2xl bg-primary-container flex items-center justify-center mx-auto mb-4">
+            <Icon name="lightbulb" fill size={28} className="text-secondary" />
+          </div>
+          <h1 className="text-[28px] font-bold text-on-surface font-geist">{quizData.title}</h1>
+          <p className="text-[14px] text-text-muted">You've been invited to take this quiz</p>
+        </div>
+
+        <div className="border border-border-subtle rounded-xl p-5 space-y-3" style={{ backgroundColor: cardBg }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] text-text-muted font-geist">Guest</span>
+            <span className="text-[14px] text-on-surface font-medium">{quizData.guestName}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] text-text-muted font-geist">Questions</span>
+            <span className="text-[14px] text-on-surface font-medium">{quizData.questions.length}</span>
+          </div>
+          {quizData.maxAttempts !== null && (
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] text-text-muted font-geist">Attempts</span>
+              <span className="text-[14px] text-on-surface font-medium">{quizData.attemptCount} / {quizData.maxAttempts}</span>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={startQuiz}
+          className="w-full bg-secondary hover:opacity-90 text-on-secondary-fixed py-4 rounded-xl text-[16px] font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
+        >
+          <Icon name="play_arrow" size={22} />
+          Start Quiz
+        </button>
+      </div>
+    </div>
+  );
+
+  if (phase === 'quiz' && quizData) {
+    const totalQ = quizData.questions.length;
+    const answeredCount = Object.keys(answers).length;
+    const questionsToRender = viewMode === 'all' ? quizData.questions : [quizData.questions[singleIndex]];
+
+    return (
+      <div className="h-screen flex flex-col" style={{ backgroundColor: bg }}>
+        {/* Header */}
+        <header className="relative flex justify-between items-center h-16 px-6 border-b border-border-subtle shrink-0 sticky top-0 z-10" style={{ backgroundColor: bg }}>
+          <div className="flex items-center gap-2">
+            <Icon name="lightbulb" fill size={18} className="text-secondary" />
+            <span className="text-[14px] font-semibold text-on-surface font-geist truncate hidden sm:block">{quizData.title}</span>
+          </div>
+          <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none">
+            <div className="w-48 h-1 bg-surface-variant rounded-full overflow-hidden">
+              <div className="h-full bg-secondary rounded-full transition-all duration-300" style={{ width: `${totalQ > 0 ? (answeredCount / totalQ) * 100 : 0}%` }} />
+            </div>
+            <span className="text-[11px] text-text-muted">{answeredCount}/{totalQ}</span>
+          </div>
+          <button
+            onClick={() => void submit()}
+            disabled={submitting}
+            className="px-4 py-1.5 rounded bg-accent-teal hover:opacity-90 disabled:opacity-50 text-white text-[12px] font-medium transition-colors shadow-sm flex items-center gap-2"
+          >
+            {submitting && <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>}
+            Submit Quiz
+          </button>
+        </header>
+
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-[900px] mx-auto px-6 py-8">
+            {/* Title + view toggle */}
+            <div className="mb-8 border-b border-border-subtle pb-6 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
+              <div>
+                <h2 className="text-[28px] font-bold text-on-surface font-geist">{quizData.title}</h2>
+                <p className="text-[14px] text-text-muted mt-1">Welcome, {quizData.guestName}</p>
+              </div>
+              <div className="flex items-center bg-surface-container-high rounded p-1 border border-border-subtle shrink-0">
+                <button onClick={() => setViewMode('all')} className={`px-3 py-1.5 rounded text-[12px] font-medium transition-all ${viewMode === 'all' ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-text-muted hover:text-on-surface'}`}>All Questions</button>
+                <button onClick={() => setViewMode('one')} className={`px-3 py-1.5 rounded text-[12px] font-medium transition-all ${viewMode === 'one' ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-text-muted hover:text-on-surface'}`}>One by One</button>
+              </div>
+            </div>
+
+            {viewMode === 'one' && (
+              <div className="flex items-center justify-between mb-6">
+                <button onClick={() => setSingleIndex((i) => Math.max(0, i - 1))} disabled={singleIndex === 0} className="flex items-center gap-1 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface disabled:opacity-30 transition-colors">
+                  <Icon name="arrow_back" size={16} /> Prev
+                </button>
+                <span className="text-[12px] text-text-muted">Question {singleIndex + 1} of {totalQ}</span>
+                <button onClick={() => setSingleIndex((i) => Math.min(totalQ - 1, i + 1))} disabled={singleIndex === totalQ - 1} className="flex items-center gap-1 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface disabled:opacity-30 transition-colors">
+                  Next <Icon name="arrow_forward" size={16} />
+                </button>
+              </div>
+            )}
+
+            {errorMsg && <div className="mb-4 bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{errorMsg}</div>}
+
+            <div className="flex flex-col gap-4">
+              {questionsToRender.map((q, localIdx) => {
+                const idx = viewMode === 'all' ? localIdx : singleIndex;
+                const selected = answers[idx];
+                const isActive = viewMode === 'one';
+                return (
+                  <div key={`${idx}-${q.question}`} className={`rounded-lg p-6 transition-colors ${isActive ? 'question-active' : 'border border-border-subtle hover:border-outline-variant'}`} style={{ backgroundColor: cardBg }}>
+                    <div className="flex items-start gap-3 mb-4">
+                      <span className={`font-mono text-sm mt-0.5 shrink-0 ${isActive ? 'text-secondary' : 'text-text-muted'}`}>{String(idx + 1).padStart(2, '0')}</span>
+                      <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                    </div>
+                    <div className="flex flex-col gap-3 ml-8">
+                      {q.choices.map((choice, cIdx) => {
+                        const isSelected = selected === cIdx;
+                        const cls = `flex items-center gap-4 p-4 rounded border cursor-pointer transition-colors group ${isSelected ? 'quiz-option-selected' : 'border-border-subtle hover:bg-surface-variant'}`;
+                        return (
+                          <label key={cIdx} className={cls}>
+                            <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isSelected ? 'border-secondary' : 'border-outline'}`}>
+                              {isSelected && <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />}
+                            </div>
+                            <input type="radio" name={`q-${idx}`} checked={isSelected} onChange={() => setAnswers((prev) => ({ ...prev, [idx]: cIdx }))} className="hidden" />
+                            <span className={`text-[14px] ${isSelected ? 'text-on-surface' : 'text-on-surface-variant group-hover:text-on-surface'}`}>{choice}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom submit */}
+            <div className="mt-8 flex justify-end">
+              <button
+                onClick={() => void submit()}
+                disabled={submitting}
+                className="px-6 py-3 bg-accent-teal hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-[14px] font-bold transition-all shadow-lg flex items-center gap-2"
+              >
+                {submitting && <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>}
+                Submit Quiz
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (phase === 'result' && result && quizData) {
+    const pct = Math.round((result.score / result.total) * 100);
+    return (
+      <div className="h-screen flex flex-col" style={{ backgroundColor: bg }}>
+        {/* Header */}
+        <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle shrink-0" style={{ backgroundColor: bg }}>
+          <div className="flex items-center gap-2">
+            <Icon name="lightbulb" fill size={18} className="text-secondary" />
+            <span className="text-[14px] font-semibold text-on-surface font-geist">{quizData.title}</span>
+          </div>
+          <span className={`px-4 py-1.5 rounded text-[12px] font-bold ${scoreColor(pct)}`} style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>
+            {result.score}/{result.total} · {pct}%
+          </span>
+        </header>
+
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-[900px] mx-auto px-6 py-8">
+            {/* Score card */}
+            <div className="mb-10 p-6 rounded-xl border border-border-subtle text-center space-y-2" style={{ backgroundColor: cardBg }}>
+              <p className="text-[13px] text-text-muted uppercase tracking-widest font-geist">Your Score</p>
+              <div className={`text-[56px] font-bold font-geist ${scoreColor(pct)}`}>{pct}%</div>
+              <p className="text-[16px] text-text-muted">{result.score} out of {result.total} correct</p>
+              <p className="text-[13px] text-text-muted">Well done, {quizData.guestName}!</p>
+            </div>
+
+            {/* Review */}
+            <div className="flex flex-col gap-4">
+              {result.questions.map((q, idx) => {
+                const isCorrect = (cIdx: number) => cIdx === q.correctIndex;
+                const isWrong = (cIdx: number) => q.userAnswer === cIdx && cIdx !== q.correctIndex;
+                const skipped = q.userAnswer === -1;
+                return (
+                  <div key={idx} className="rounded-lg p-6 border border-border-subtle" style={{ backgroundColor: cardBg }}>
+                    <div className="flex items-start gap-3 mb-4">
+                      <span className="font-mono text-sm text-text-muted mt-0.5 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
+                      <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                      {skipped && <span className="ml-auto shrink-0 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px]">Skipped</span>}
+                    </div>
+                    <div className="flex flex-col gap-3 ml-8">
+                      {q.choices.map((choice, cIdx) => {
+                        let cls = 'flex items-center gap-4 p-4 rounded border transition-colors';
+                        if (isCorrect(cIdx)) cls += ' quiz-option-correct';
+                        else if (isWrong(cIdx)) cls += ' quiz-option-wrong';
+                        else cls += ' border-border-subtle opacity-50';
+                        return (
+                          <div key={cIdx} className={cls}>
+                            <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isCorrect(cIdx) ? 'border-secondary' : 'border-outline'}`}>
+                              {(q.userAnswer === cIdx || isCorrect(cIdx)) && (
+                                <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />
+                              )}
+                            </div>
+                            <span className={`text-[14px] flex-1 ${isCorrect(cIdx) ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
+                            {isCorrect(cIdx) && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
+                            {isWrong(cIdx) && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {q.explanation && (
+                      <div className="mt-4 ml-8 p-3 bg-surface-container rounded border border-border-subtle">
+                        <p className="text-[13px] text-text-muted"><span className="text-secondary font-medium mr-1">Explanation:</span>{q.explanation}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-8 pt-6 border-t border-border-subtle text-center">
+              <p className="text-[13px] text-text-muted">Thanks for completing this quiz!</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function App() {
+  return (
+    <BrowserRouter>
+      <AppRouter />
+    </BrowserRouter>
+  );
+}
+
+function AppRouter() {
+  const location = useLocation();
+  const isPublic = location.pathname.startsWith('/public/');
+
+  if (isPublic) {
+    return (
+      <Routes>
+        <Route path="/public/s/:token" element={<GuestQuizPage />} />
+      </Routes>
+    );
+  }
+
+  return <AdminApp />;
+}
+
+function AdminApp() {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
 
   async function reload() {
@@ -1503,18 +2261,17 @@ export function App() {
 
   return (
     <QuizzesContext.Provider value={{ quizzes, reload }}>
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<CreateQuizPage />} />
-            <Route path="/quiz/:id" element={<QuizPage />} />
-            <Route path="/review/:attemptId" element={<ReviewPage />} />
-            <Route path="/results" element={<ResultsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<CreateQuizPage />} />
+          <Route path="/quiz/:id" element={<QuizPage />} />
+          <Route path="/review/:attemptId" element={<ReviewPage />} />
+          <Route path="/results" element={<ResultsPage />} />
+          <Route path="/shares" element={<SharesPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
     </QuizzesContext.Provider>
   );
 }

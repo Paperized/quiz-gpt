@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import multer from 'multer';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,7 +71,9 @@ function safeCompare(a: string, b: string): boolean {
 }
 
 app.use((req, res, next) => {
-  if (!hasBasicAuth() || req.path === '/api/health') {
+  if (!hasBasicAuth()) return next();
+  // Only protect API routes; public API and all static assets are open
+  if (!req.path.startsWith('/api/') || req.path.startsWith('/api/public/') || req.path === '/api/health') {
     return next();
   }
 
@@ -410,7 +412,7 @@ app.get('/api/results/history', asyncRoute(async (req, res) => {
   const toDate = to ? new Date(`${to}T23:59:59.999Z`) : null;
 
   const { rows } = await pool.query(`
-    SELECT a.id, a.quiz_id, a.score, a.total, a.started_at, a.completed_at, q.title
+    SELECT a.id, a.quiz_id, a.score, a.total, a.started_at, a.completed_at, a.guest_name, q.title
     FROM attempts a
     JOIN quizzes q ON q.id = a.quiz_id
     ORDER BY a.completed_at DESC
@@ -431,6 +433,7 @@ app.get('/api/results/history', asyncRoute(async (req, res) => {
     total: r.total,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+    guestName: r.guest_name ?? null,
     timeTakenSeconds: Math.max(0, Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000))
   })));
 }));
@@ -493,6 +496,200 @@ app.put('/api/settings', asyncRoute(async (req, res) => {
   logger.info('settings_saved', { keys: Object.keys(parsed.data) });
   const display = await getSettingsForDisplay();
   return res.json(display);
+}));
+
+const createShareSchema = z.object({
+  guestName: z.string().trim().min(1).max(100),
+  maxAttempts: z.number().int().min(1).max(1000).nullable().optional(),
+  expiresAt: z.string().datetime().nullable().optional()
+});
+
+const guestAttemptSchema = z.object({
+  answers: z.array(z.number().int()),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime()
+}).superRefine((a, ctx) => {
+  if (new Date(a.completedAt).getTime() < new Date(a.startedAt).getTime()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'completedAt cannot be before startedAt' });
+  }
+});
+
+// ─── Share management (auth-protected) ───────────────────────────────────────
+
+app.post('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
+  const { id } = req.params;
+  const quiz = await pool.query('SELECT id FROM quizzes WHERE id = $1', [id]);
+  if (!quiz.rows[0]) return res.status(404).json({ error: 'Quiz not found' });
+
+  const parsed = createShareSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+
+  const { guestName, maxAttempts, expiresAt } = parsed.data;
+  const shareId = randomUUID();
+  const token = randomBytes(24).toString('base64url');
+
+  const { rows } = await pool.query(`
+    INSERT INTO quiz_shares(id, quiz_id, token, guest_name, max_attempts, expires_at)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, quiz_id, token, guest_name, max_attempts, expires_at, created_at
+  `, [shareId, id, token, guestName, maxAttempts ?? null, expiresAt ?? null]);
+
+  const s = rows[0];
+  logger.info('share_created', { shareId: s.id, quizId: id, guestName });
+  return res.status(201).json({
+    id: s.id, quizId: s.quiz_id, token: s.token,
+    guestName: s.guest_name, maxAttempts: s.max_attempts,
+    expiresAt: s.expires_at, createdAt: s.created_at, attemptCount: 0
+  });
+}));
+
+app.get('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
+  const { id } = req.params;
+  const { rows } = await pool.query(`
+    SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
+           COUNT(a.id)::int AS attempt_count
+    FROM quiz_shares s
+    LEFT JOIN attempts a ON a.share_id = s.id
+    WHERE s.quiz_id = $1
+    GROUP BY s.id
+    ORDER BY s.created_at DESC
+  `, [id]);
+  return res.json(rows.map((s) => ({
+    id: s.id, quizId: s.quiz_id, token: s.token,
+    guestName: s.guest_name, maxAttempts: s.max_attempts,
+    expiresAt: s.expires_at, createdAt: s.created_at, attemptCount: s.attempt_count
+  })));
+}));
+
+app.get('/api/shares', asyncRoute(async (_req, res) => {
+  const { rows } = await pool.query(`
+    SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
+           q.title AS quiz_title,
+           COUNT(a.id)::int AS attempt_count
+    FROM quiz_shares s
+    JOIN quizzes q ON q.id = s.quiz_id
+    LEFT JOIN attempts a ON a.share_id = s.id
+    GROUP BY s.id, q.title
+    ORDER BY s.created_at DESC
+  `);
+  return res.json(rows.map((s) => ({
+    id: s.id, quizId: s.quiz_id, quizTitle: s.quiz_title, token: s.token,
+    guestName: s.guest_name, maxAttempts: s.max_attempts,
+    expiresAt: s.expires_at, createdAt: s.created_at, attemptCount: s.attempt_count
+  })));
+}));
+
+app.delete('/api/shares/:shareId', asyncRoute(async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM quiz_shares WHERE id = $1', [req.params.shareId]);
+  if (!rowCount) return res.status(404).json({ error: 'Share not found' });
+  logger.info('share_deleted', { shareId: req.params.shareId });
+  return res.status(204).send();
+}));
+
+// ─── Public guest routes (no auth) ───────────────────────────────────────────
+
+app.get('/api/public/s/:token', asyncRoute(async (req, res) => {
+  const { token } = req.params;
+  const { rows } = await pool.query(`
+    SELECT s.id, s.quiz_id, s.guest_name, s.max_attempts, s.expires_at,
+           q.title, q.questions,
+           COUNT(a.id)::int AS attempt_count
+    FROM quiz_shares s
+    JOIN quizzes q ON q.id = s.quiz_id
+    LEFT JOIN attempts a ON a.share_id = s.id
+    WHERE s.token = $1
+    GROUP BY s.id, q.title, q.questions
+  `, [token]);
+
+  if (!rows[0]) return res.status(404).json({ error: 'Share link not found' });
+  const s = rows[0];
+
+  if (s.expires_at && new Date(s.expires_at) < new Date()) {
+    return res.status(410).json({ error: 'This share link has expired' });
+  }
+  if (s.max_attempts !== null && s.attempt_count >= s.max_attempts) {
+    return res.status(410).json({ error: 'Maximum attempts reached for this share link' });
+  }
+
+  // Strip correct answers and explanations from questions
+  const publicQuestions = (s.questions as QuizQuestion[]).map(({ question, choices }) => ({ question, choices }));
+
+  return res.json({
+    shareId: s.id,
+    quizId: s.quiz_id,
+    title: s.title,
+    guestName: s.guest_name,
+    maxAttempts: s.max_attempts,
+    attemptCount: s.attempt_count,
+    questions: publicQuestions
+  });
+}));
+
+app.post('/api/public/s/:token/attempt', asyncRoute(async (req, res) => {
+  const { token } = req.params;
+  const { rows: shareRows } = await pool.query(`
+    SELECT s.id, s.quiz_id, s.guest_name, s.max_attempts, s.expires_at,
+           q.questions,
+           COUNT(a.id)::int AS attempt_count
+    FROM quiz_shares s
+    JOIN quizzes q ON q.id = s.quiz_id
+    LEFT JOIN attempts a ON a.share_id = s.id
+    WHERE s.token = $1
+    GROUP BY s.id, q.questions
+  `, [token]);
+
+  if (!shareRows[0]) return res.status(404).json({ error: 'Share link not found' });
+  const share = shareRows[0];
+
+  if (share.expires_at && new Date(share.expires_at) < new Date()) {
+    return res.status(410).json({ error: 'This share link has expired' });
+  }
+  if (share.max_attempts !== null && share.attempt_count >= share.max_attempts) {
+    return res.status(410).json({ error: 'Maximum attempts reached for this share link' });
+  }
+
+  const parsed = guestAttemptSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+
+  const { answers, startedAt, completedAt } = parsed.data;
+  const questions = share.questions as QuizQuestion[];
+
+  if (answers.length !== questions.length) {
+    return res.status(400).json({ error: 'answers length must match quiz question count' });
+  }
+  if (answers.some((answer, index) => answer < -1 || answer >= questions[index].choices.length)) {
+    return res.status(400).json({ error: 'answers include an invalid choice index' });
+  }
+
+  const total = questions.length;
+  const score = questions.reduce((sum, q, i) => sum + (answers[i] === q.correctIndex ? 1 : 0), 0);
+
+  const id = randomUUID();
+  const { rows } = await pool.query(`
+    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, guest_name, share_id)
+    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
+    RETURNING id, quiz_id, answers, score, total, started_at, completed_at
+  `, [id, share.quiz_id, JSON.stringify(answers), score, total, startedAt, completedAt, share.guest_name, share.id]);
+
+  logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score, total });
+
+  const a = rows[0];
+  // Return full review data (with correctIndex + explanations) after submit
+  return res.status(201).json({
+    id: a.id,
+    quizId: a.quiz_id,
+    score: a.score,
+    total: a.total,
+    startedAt: a.started_at,
+    completedAt: a.completed_at,
+    questions: questions.map((q, i) => ({
+      question: q.question,
+      choices: q.choices,
+      correctIndex: q.correctIndex,
+      explanation: q.explanation,
+      userAnswer: answers[i]
+    }))
+  });
 }));
 
 const publicDir = join(fileURLToPath(new URL('.', import.meta.url)), '../public');
