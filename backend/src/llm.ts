@@ -56,8 +56,8 @@ function sanitizeQuestions(
   parsed: z.infer<typeof outputSchema>,
   settings: QuizSettings
 ): QuizQuestion[] {
-  const limitedQuestions = parsed.questions.slice(0, settings.maxQuestions);
-  if (limitedQuestions.length < settings.minQuestions) {
+  const limitedQuestions = parsed.questions.slice(0, settings.numQuestions);
+  if (limitedQuestions.length < settings.numQuestions) {
     throw new Error('LLM returned too few questions for requested constraints');
   }
 
@@ -85,8 +85,7 @@ export async function generateQuizFromLLM(
   const cfg = await getEffectiveSettings();
 
   const settingsSummary = [
-    `minQuestions=${settings.minQuestions}`,
-    `maxQuestions=${settings.maxQuestions}`,
+    `numQuestions=${settings.numQuestions}`,
     `choicesPerQuestion=${settings.choicesPerQuestion}`,
     `difficulty=${settings.difficulty}`,
     `language=${settings.language}`,

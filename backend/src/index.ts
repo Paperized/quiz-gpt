@@ -100,19 +100,12 @@ app.use((req, res, next) => {
 app.use('/api', apiLimiter);
 
 const quizSettingsSchema = z.object({
-  minQuestions: z.number().int().min(1).max(100),
-  maxQuestions: z.number().int().min(1).max(100),
+  numQuestions: z.number().int().min(1).max(100),
   choicesPerQuestion: z.number().int().min(2).max(6),
   difficulty: z.enum(['Easy', 'Medium', 'Hard']),
   language: z.string().trim().min(2),
   questionType: z.enum(['multiple_choice', 'true_false', 'mixed'])
 }).superRefine((settings, ctx) => {
-  if (settings.minQuestions > settings.maxQuestions) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'minQuestions cannot be greater than maxQuestions'
-    });
-  }
   if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

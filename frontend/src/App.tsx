@@ -4,8 +4,7 @@ import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation, Navi
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type QuizSettings = {
-  minQuestions: number;
-  maxQuestions: number;
+  numQuestions: number;
   choicesPerQuestion: number;
   difficulty: 'Easy' | 'Medium' | 'Hard';
   language: string;
@@ -90,8 +89,7 @@ const useQuizzes = () => useContext(QuizzesContext);
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const defaultSettings: QuizSettings = {
-  minQuestions: 5,
-  maxQuestions: 10,
+  numQuestions: 10,
   choicesPerQuestion: 4,
   difficulty: 'Medium',
   language: 'English',
@@ -323,7 +321,6 @@ function CreateQuizPage() {
   const [documents, setDocuments] = useState<File[]>([]);
 
   async function generate() {
-    if (settings.minQuestions > settings.maxQuestions) { setError('Min questions cannot exceed max'); return; }
     if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) { setError('True/False requires 2 choices'); return; }
     setLoading(true); setError(null);
     try {
@@ -437,12 +434,12 @@ function CreateQuizPage() {
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
                   <label className="text-[12px] font-medium text-on-surface font-geist">Number of Questions</label>
-                  <span className="text-[12px] font-medium text-secondary">{settings.maxQuestions}</span>
+                  <span className="text-[12px] font-medium text-secondary">{settings.numQuestions}</span>
                 </div>
                 <input
                   className="w-full h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-accent-teal"
-                  max={40} min={1} type="range" value={settings.maxQuestions}
-                  onChange={(e) => setSettings({ ...settings, minQuestions: Math.min(settings.minQuestions, +e.target.value), maxQuestions: +e.target.value })}
+                  max={40} min={1} type="range" value={settings.numQuestions}
+                  onChange={(e) => setSettings({ ...settings, numQuestions: +e.target.value })}
                 />
                 <div className="flex justify-between text-[12px] text-text-muted opacity-50"><span>1</span><span>40</span></div>
               </div>

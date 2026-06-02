@@ -2,8 +2,7 @@ export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 export type QuestionType = 'multiple_choice' | 'true_false' | 'mixed';
 
 export interface QuizSettings {
-  minQuestions: number;
-  maxQuestions: number;
+  numQuestions: number;
   choicesPerQuestion: number;
   difficulty: Difficulty;
   language: string;
