@@ -117,10 +117,13 @@ const quizSettingsSchema = z.object({
 });
 
 const generateQuizSchema = z.object({
-  topic: z.string().trim().min(3),
+  topic: z.string().trim().min(3).max(2000),
   settings: quizSettingsSchema,
   sourceText: z.string().trim().max(250_000).optional(),
-  githubRepoUrl: z.string().trim().url().optional()
+  githubRepoUrl: z.string().trim().url().optional().refine(
+    (url) => !url || /^https:\/\/github\.com\//i.test(url),
+    { message: 'Only github.com URLs are allowed' }
+  )
 });
 
 const updateQuizSchema = z.object({
@@ -347,20 +350,22 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
   const score = questions.reduce((sum, question, index) => (
     sum + (answers[index] === question.correctIndex ? 1 : 0)
   ), 0);
+  const submittedAt = new Date();
   logger.info('attempt_submitted', {
     quizId,
     score,
     total,
     answered: answers.filter((answer) => answer >= 0).length,
     startedAt,
-    completedAt
+    completedAt,
+    submittedAt: submittedAt.toISOString()
   });
   const id = randomUUID();
   const { rows } = await pool.query(`
-    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at)
-    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
-    RETURNING id, quiz_id, answers, score, total, started_at, completed_at
-  `, [id, quizId, JSON.stringify(answers), score, total, startedAt, completedAt]);
+    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at)
+    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+    RETURNING id, quiz_id, answers, score, total, started_at, completed_at, submitted_at
+  `, [id, quizId, JSON.stringify(answers), score, total, startedAt, completedAt, submittedAt]);
   const a = rows[0];
   return res.status(201).json({
     id: a.id,
@@ -369,7 +374,8 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
     score: a.score,
     total: a.total,
     startedAt: a.started_at,
-    completedAt: a.completed_at
+    completedAt: a.completed_at,
+    submittedAt: a.submitted_at
   });
 }));
 
@@ -405,27 +411,38 @@ app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/results/history', asyncRoute(async (req, res) => {
-  const quizName = (req.query.quizName as string | undefined)?.toLowerCase();
+  const quizName = (req.query.quizName as string | undefined)?.trim().toLowerCase();
   const from = req.query.from as string | undefined;
   const to = req.query.to as string | undefined;
-  const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : null;
-  const toDate = to ? new Date(`${to}T23:59:59.999Z`) : null;
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (quizName) {
+    params.push(`%${quizName}%`);
+    conditions.push(`LOWER(q.title) LIKE $${params.length}`);
+  }
+  if (from) {
+    params.push(new Date(`${from}T00:00:00.000Z`));
+    conditions.push(`a.completed_at >= $${params.length}`);
+  }
+  if (to) {
+    params.push(new Date(`${to}T23:59:59.999Z`));
+    conditions.push(`a.completed_at <= $${params.length}`);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const { rows } = await pool.query(`
     SELECT a.id, a.quiz_id, a.score, a.total, a.started_at, a.completed_at, a.guest_name, q.title
     FROM attempts a
     JOIN quizzes q ON q.id = a.quiz_id
+    ${where}
     ORDER BY a.completed_at DESC
-  `);
+    LIMIT 1000
+  `, params);
 
-  const filtered = rows.filter((r) => {
-    if (quizName && !r.title.toLowerCase().includes(quizName)) return false;
-    if (fromDate && new Date(r.completed_at) < fromDate) return false;
-    if (toDate && new Date(r.completed_at) > toDate) return false;
-    return true;
-  });
-
-  res.json(filtered.map((r) => ({
+  res.json(rows.map((r) => ({
     id: r.id,
     quizId: r.quiz_id,
     quizTitle: r.title,
@@ -488,12 +505,7 @@ app.put('/api/settings', asyncRoute(async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
   }
-  try {
-    await saveSettings(parsed.data);
-  } catch (err) {
-    throw err;
-  }
-  logger.info('settings_saved', { keys: Object.keys(parsed.data) });
+  await saveSettings(parsed.data);  logger.info('settings_saved', { keys: Object.keys(parsed.data) });
   const display = await getSettingsForDisplay();
   return res.json(display);
 }));
@@ -627,69 +639,98 @@ app.get('/api/public/s/:token', asyncRoute(async (req, res) => {
 
 app.post('/api/public/s/:token/attempt', asyncRoute(async (req, res) => {
   const { token } = req.params;
-  const { rows: shareRows } = await pool.query(`
-    SELECT s.id, s.quiz_id, s.guest_name, s.max_attempts, s.expires_at,
-           q.questions,
-           COUNT(a.id)::int AS attempt_count
-    FROM quiz_shares s
-    JOIN quizzes q ON q.id = s.quiz_id
-    LEFT JOIN attempts a ON a.share_id = s.id
-    WHERE s.token = $1
-    GROUP BY s.id, q.questions
-  `, [token]);
 
-  if (!shareRows[0]) return res.status(404).json({ error: 'Share link not found' });
-  const share = shareRows[0];
-
-  if (share.expires_at && new Date(share.expires_at) < new Date()) {
-    return res.status(410).json({ error: 'This share link has expired' });
-  }
-  if (share.max_attempts !== null && share.attempt_count >= share.max_attempts) {
-    return res.status(410).json({ error: 'Maximum attempts reached for this share link' });
-  }
-
+  // Validate body before acquiring the transaction lock
   const parsed = guestAttemptSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
-
   const { answers, startedAt, completedAt } = parsed.data;
-  const questions = share.questions as QuizQuestion[];
 
-  if (answers.length !== questions.length) {
-    return res.status(400).json({ error: 'answers length must match quiz question count' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Lock the share row to prevent TOCTOU race on max_attempts (H-1)
+    // FOR UPDATE cannot be used with GROUP BY, so we lock first, then count separately.
+    const { rows: shareRows } = await client.query(`
+      SELECT s.id, s.quiz_id, s.guest_name, s.max_attempts, s.expires_at,
+             q.questions
+      FROM quiz_shares s
+      JOIN quizzes q ON q.id = s.quiz_id
+      WHERE s.token = $1
+      FOR UPDATE OF s
+    `, [token]);
+
+    if (shareRows[0]) {
+      const { rows: countRows } = await client.query(
+        `SELECT COUNT(id)::int AS attempt_count FROM attempts WHERE share_id = $1`,
+        [shareRows[0].id]
+      );
+      shareRows[0].attempt_count = countRows[0].attempt_count;
+    }
+
+    if (!shareRows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Share link not found' });
+    }
+    const share = shareRows[0];
+
+    if (share.expires_at && new Date(share.expires_at) < new Date()) {
+      await client.query('ROLLBACK');
+      return res.status(410).json({ error: 'This share link has expired' });
+    }
+    if (share.max_attempts !== null && share.attempt_count >= share.max_attempts) {
+      await client.query('ROLLBACK');
+      return res.status(410).json({ error: 'Maximum attempts reached for this share link' });
+    }
+
+    const questions = share.questions as QuizQuestion[];
+    if (answers.length !== questions.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'answers length must match quiz question count' });
+    }
+    if (answers.some((answer, index) => answer < -1 || answer >= questions[index].choices.length)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'answers include an invalid choice index' });
+    }
+
+    const total = questions.length;
+    const score = questions.reduce((sum, q, i) => sum + (answers[i] === q.correctIndex ? 1 : 0), 0);
+    const submittedAt = new Date();
+
+    const id = randomUUID();
+    const { rows } = await client.query(`
+      INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at, guest_name, share_id)
+      VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, quiz_id, score, total, started_at, completed_at, submitted_at
+    `, [id, share.quiz_id, JSON.stringify(answers), score, total, startedAt, completedAt, submittedAt, share.guest_name, share.id]);
+
+    await client.query('COMMIT');
+
+    logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score, total });
+
+    const a = rows[0];
+    return res.status(201).json({
+      id: a.id,
+      quizId: a.quiz_id,
+      score: a.score,
+      total: a.total,
+      startedAt: a.started_at,
+      completedAt: a.completed_at,
+      submittedAt: a.submitted_at,
+      questions: questions.map((q, i) => ({
+        question: q.question,
+        choices: q.choices,
+        correctIndex: q.correctIndex,
+        explanation: q.explanation,
+        userAnswer: answers[i]
+      }))
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-  if (answers.some((answer, index) => answer < -1 || answer >= questions[index].choices.length)) {
-    return res.status(400).json({ error: 'answers include an invalid choice index' });
-  }
-
-  const total = questions.length;
-  const score = questions.reduce((sum, q, i) => sum + (answers[i] === q.correctIndex ? 1 : 0), 0);
-
-  const id = randomUUID();
-  const { rows } = await pool.query(`
-    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, guest_name, share_id)
-    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
-    RETURNING id, quiz_id, answers, score, total, started_at, completed_at
-  `, [id, share.quiz_id, JSON.stringify(answers), score, total, startedAt, completedAt, share.guest_name, share.id]);
-
-  logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score, total });
-
-  const a = rows[0];
-  // Return full review data (with correctIndex + explanations) after submit
-  return res.status(201).json({
-    id: a.id,
-    quizId: a.quiz_id,
-    score: a.score,
-    total: a.total,
-    startedAt: a.started_at,
-    completedAt: a.completed_at,
-    questions: questions.map((q, i) => ({
-      question: q.question,
-      choices: q.choices,
-      correctIndex: q.correctIndex,
-      explanation: q.explanation,
-      userAnswer: answers[i]
-    }))
-  });
 }));
 
 const publicDir = join(fileURLToPath(new URL('.', import.meta.url)), '../public');
@@ -721,6 +762,11 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 runMigrations()
   .then(() => initializeSettings())
   .then(() => {
+    if (!config.SETTINGS_ENCRYPTION_KEY) {
+      logger.warn('security.encryption_key_missing', {
+        message: 'SETTINGS_ENCRYPTION_KEY is not set — API keys will be stored in plaintext. Generate with: openssl rand -hex 32'
+      });
+    }
     app.listen(config.PORT, () => {
       logger.info('server_started', {
         port: config.PORT,

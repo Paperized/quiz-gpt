@@ -164,6 +164,20 @@ function scorePathByTopic(path: string, topicTerms: Set<string>): number {
   return score;
 }
 
+const ALLOWED_FETCH_HOSTNAMES = new Set(['api.github.com', 'raw.githubusercontent.com']);
+
+function assertAllowedUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+  if (!ALLOWED_FETCH_HOSTNAMES.has(parsed.hostname)) {
+    throw new Error(`Fetch to host '${parsed.hostname}' is not allowed`);
+  }
+}
+
 async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<string>): Promise<SourceDocument[]> {
   const parsed = parseGitHubRepoUrl(githubRepoUrl);
   if (!parsed) {
@@ -178,7 +192,9 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
     headers.Authorization = `Bearer ${config.GITHUB_TOKEN}`;
   }
 
-  const repoRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}`, { headers });
+  const repoApiUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`;
+  assertAllowedUrl(repoApiUrl);
+  const repoRes = await fetch(repoApiUrl, { headers });
   if (!repoRes.ok) {
     throw new Error(`Unable to fetch repository metadata (${repoRes.status})`);
   }
@@ -238,6 +254,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
     const safeRef = ref.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     const safePath = entry.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     const rawUrl = `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${safeRef}/${safePath}`;
+    assertAllowedUrl(rawUrl);
     const fileRes = await fetch(rawUrl, { headers: { 'User-Agent': 'learn-gpt' } });
     if (!fileRes.ok) continue;
 

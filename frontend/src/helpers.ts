@@ -1,0 +1,30 @@
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+import type { QuizSettings } from './types';
+
+export const defaultSettings: QuizSettings = {
+  numQuestions: 10,
+  choicesPerQuestion: 4,
+  difficulty: 'Medium',
+  language: 'English',
+  questionType: 'mixed',
+};
+
+export function shuffleArray<T>(arr: T[]): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+export function scoreColor(pct: number) {
+  if (pct >= 80) return 'text-success';
+  if (pct >= 60) return 'text-yellow-400';
+  return 'text-error';
+}
+
+export function formatSeconds(s: number) {
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
