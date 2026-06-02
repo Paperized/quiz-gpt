@@ -1141,6 +1141,7 @@ function SettingsPage() {
   const [rateLimitMax, setRateLimitMax] = useState('');
   const [generateRateLimitMax, setGenerateRateLimitMax] = useState('');
   const [errs, setErrs] = useState<Record<string, string>>({});
+  const [showLlmKey, setShowLlmKey] = useState(false);
   const [showEmbKey, setShowEmbKey] = useState(false);
 
   useEffect(() => {
