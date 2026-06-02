@@ -76,7 +76,10 @@ export async function getEffectiveSettings(): Promise<EffectiveSettings> {
     }
   }
 
-  return configSchema.parse({ ...process.env, ...dbOverrides });
+  const merged = Object.fromEntries(
+    Object.entries({ ...process.env, ...dbOverrides }).map(([k, v]) => [k, v === '' ? undefined : v])
+  );
+  return configSchema.parse(merged);
 }
 
 const settingsSaveSchema = z.object({
