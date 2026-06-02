@@ -1,6 +1,6 @@
-# learn-gpt
+# QuizGPT
 
-learn-gpt is a self-hostable full-stack web app that generates quizzes from natural language prompts. Quizzes and attempts are persisted in PostgreSQL, and quizzes can be retaken without re-calling the LLM. The app supports source-grounded generation from uploaded documents and GitHub repositories.
+QuizGPT is a self-hostable full-stack web app that generates quizzes from natural language prompts. Quizzes and attempts are persisted in PostgreSQL, and quizzes can be retaken without re-calling the LLM. The app supports source-grounded generation from uploaded documents and GitHub repositories.
 
 ## Stack choice
 
@@ -89,6 +89,7 @@ Server logs are JSON lines controlled by `LOG_LEVEL`. They include startup confi
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
+| `SETTINGS_ENCRYPTION_KEY` | Yes | - | AES-256-GCM key for encrypting API keys stored via the Settings UI. A default is provided in `.env.example` — **change it before deploying**. Generate a new one with: `openssl rand -hex 32` |
 | `PORT` | No | `3000` | Backend HTTP port |
 | `PUBLIC_URL` | Yes | `http://localhost:3000` | Public app URL injected via runtime `/config.js` |
 | `LOG_LEVEL` | No | `info` | JSON log level: `debug`, `info`, `warn`, `error` |
@@ -162,3 +163,4 @@ EMBEDDING_MODEL=voyage-3.5
 - For very large/private GitHub repos, set `GITHUB_TOKEN`.
 - If the app is reachable from the public internet, set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` or put it behind an authenticated reverse proxy.
 - On every push to `main`, GitHub Actions builds and publishes the app image to `ghcr.io/paperized/quiz-gpt`.
+- The default `SETTINGS_ENCRYPTION_KEY` in `.env.example` is public — always replace it with your own before deploying: `openssl rand -hex 32`.
