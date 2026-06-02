@@ -1122,6 +1122,39 @@ function SettingsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activeSection, setActiveSection] = useState('llm');
+
+  const sections = [
+    { id: 'llm', label: 'LLM Provider' },
+    { id: 'embedding', label: 'Embedding & Advanced' },
+    { id: 'ratelimit', label: 'Rate Limiting' },
+    { id: 'security', label: 'Security' },
+  ];
+
+  // Track active section via IntersectionObserver
+  useEffect(() => {
+    const observers: IntersectionObserver[] = [];
+    const visibleRatios: Record<string, number> = {};
+
+    sections.forEach(({ id }) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const obs = new IntersectionObserver(
+        ([entry]) => {
+          visibleRatios[id] = entry.intersectionRatio;
+          const best = sections.map((s) => s.id).reduce((a, b) =>
+            (visibleRatios[a] ?? 0) >= (visibleRatios[b] ?? 0) ? a : b
+          );
+          setActiveSection(best);
+        },
+        { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1], rootMargin: '-10% 0px -60% 0px' }
+      );
+      obs.observe(el);
+      observers.push(obs);
+    });
+
+    return () => observers.forEach((o) => o.disconnect());
+  }, [display]); // re-run when display loads (sections render)
 
   // Form state
   const [llmApiStyle, setLlmApiStyle] = useState('openai_compatible');
@@ -1258,7 +1291,12 @@ function SettingsPage() {
             <Icon name="chevron_right" size={14} />
             <span className="text-[10px] uppercase tracking-wider text-on-surface">Configuration</span>
           </div>
-          <h2 className="text-[32px] font-bold text-on-surface font-geist">Settings</h2>
+          <div className="flex items-center gap-3">
+            <button onClick={() => navigate(-1)} className="text-text-muted hover:text-secondary transition-colors p-1 rounded-full hover:bg-surface-variant hidden md:flex items-center justify-center" title="Go back">
+              <Icon name="arrow_back" size={20} />
+            </button>
+            <h2 className="text-[32px] font-bold text-on-surface font-geist">Settings</h2>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {saveSuccess && (
@@ -1287,17 +1325,23 @@ function SettingsPage() {
             {/* In-page nav */}
             <nav className="hidden md:block sticky top-8">
               <ul className="space-y-1">
-                {[
-                  { href: '#llm', label: 'LLM Provider' },
-                  { href: '#embedding', label: 'Embedding & Advanced' },
-                  { href: '#ratelimit', label: 'Rate Limiting' },
-                ].map(({ href, label }) => (
-                  <li key={href}>
-                    <a href={href} className="block px-3 py-2 text-text-muted hover:text-on-surface hover:bg-surface-variant text-[12px] rounded transition-colors font-geist">
-                      {label}
-                    </a>
-                  </li>
-                ))}
+                {sections.map(({ id, label }) => {
+                  const isActive = activeSection === id;
+                  return (
+                    <li key={id}>
+                      <a
+                        href={`#${id}`}
+                        className={`block px-3 py-2 text-[12px] rounded transition-colors font-geist border-l-2 ${
+                          isActive
+                            ? 'border-secondary bg-surface-container text-on-surface font-medium'
+                            : 'border-transparent text-text-muted hover:text-on-surface hover:bg-surface-variant'
+                        }`}
+                      >
+                        {label}
+                      </a>
+                    </li>
+                  );
+                })}
               </ul>
             </nav>
 
