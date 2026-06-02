@@ -157,10 +157,52 @@ EMBEDDING_API_KEY=<embedding-key>
 EMBEDDING_MODEL=voyage-3.5
 ```
 
+## Sharing quizzes
+
+You can share any quiz with friends or colleagues without giving them access to your QuizGPT instance. From a quiz page, click the **Share** icon to generate a unique link. Optionally set a maximum number of attempts and an expiry date.
+
+The guest experience is fully self-contained: the shared link loads a fullscreen quiz page that requires no login, does not interact with the LLM, and does not consume any API tokens. Answers are evaluated server-side against the already-generated questions stored in the database.
+
+All active share links and their attempt counts are visible under **Shares** in the sidebar, where you can also revoke them at any time.
+
+## Access control and security
+
+### Basic Auth (built-in)
+
+Set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` in `.env` to protect the entire admin interface. Basic Auth is enforced only on `/api/*` routes (excluding the public share paths listed below) and does not interfere with shared quiz links.
+
+### Forward Auth with an external auth manager
+
+If you use an auth manager (Authelia, Authentik, Keycloak, etc.) in front of QuizGPT via a reverse proxy, configure it to **bypass authentication** for the following paths so that shared quiz links remain accessible to guests without an account:
+
+| Path pattern | Purpose |
+|---|---|
+| `/public/*` | Guest quiz pages (frontend SPA routes) |
+| `/api/public/*` | Guest API: fetch quiz data, submit attempt |
+| `/config.js` | Runtime config injected into the frontend |
+| `/api/health` | Health check |
+| `/assets/*` | Static JS/CSS bundles |
+| `/favicon*` | Favicons |
+
+All other paths — especially `/api/*` — should remain behind authentication.
+
+Example rule for Authelia:
+
+```yaml
+- domain: quiz.example.com
+  policy: bypass
+  resources:
+    - "^/public/.*$"
+    - "^/api/public/.*$"
+    - "^/config\\.js$"
+    - "^/api/health$"
+    - "^/assets/.*$"
+    - "^/favicon.*$"
+```
+
 ## Notes
 
 - If you want LiteLLM, connect it as external endpoint via `LLM_BASE_URL` / `EMBEDDING_BASE_URL`.
 - For very large/private GitHub repos, set `GITHUB_TOKEN`.
-- If the app is reachable from the public internet, set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` or put it behind an authenticated reverse proxy.
 - On every push to `main`, GitHub Actions builds and publishes the app image to `ghcr.io/paperized/quiz-gpt`.
 - The default `SETTINGS_ENCRYPTION_KEY` in `.env.example` is public — always replace it with your own before deploying: `openssl rand -hex 32`.
