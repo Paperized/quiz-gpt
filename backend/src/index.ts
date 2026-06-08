@@ -13,7 +13,7 @@ import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
 import { generateQuizFromLLM } from './llm.js';
 import { getSettingsForDisplay, initializeSettings, saveSettings, settingsSaveSchema } from './settings.js';
-import type { QuizQuestion } from './types.js';
+import type { QuizQuestion, QuizSettings } from './types.js';
 
 const app = express();
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
@@ -128,7 +128,23 @@ const generateQuizSchema = z.object({
 
 const updateQuizSchema = z.object({
   title: z.string().trim().min(1).optional(),
-  pinned: z.boolean().optional()
+  pinned: z.boolean().optional(),
+  groupId: z.string().uuid().nullable().optional()
+});
+
+const createGroupSchema = z.object({
+  name: z.string().trim().min(1).max(100)
+});
+
+const updateGroupSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  position: z.number().int().min(0).optional()
+});
+
+const regenerateSchema = z.object({
+  settings: quizSettingsSchema.optional(),
+  prompt: z.string().trim().max(2000).optional(),
+  mode: z.enum(['overwrite', 'duplicate'])
 });
 
 const createAttemptSchema = z.object({
@@ -155,8 +171,9 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/quizzes', asyncRoute(async (_req, res) => {
   const { rows } = await pool.query(`
-    SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at
+    SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
     FROM quizzes
+    WHERE deleted_at IS NULL
     ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC
   `);
   res.json(rows.map((r) => ({
@@ -167,7 +184,8 @@ app.get('/api/quizzes', asyncRoute(async (_req, res) => {
     questions: r.questions,
     createdAt: r.created_at,
     pinned: r.pinned,
-    pinnedAt: r.pinned_at
+    pinnedAt: r.pinned_at,
+    groupId: r.group_id
   })));
 }));
 
@@ -240,7 +258,7 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
     const result = await pool.query(`
       INSERT INTO quizzes(id, title, topic, settings, questions)
       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
-      RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at
+      RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
     `, [id, llm.title, parsed.data.topic, JSON.stringify(parsed.data.settings), JSON.stringify(llm.questions)]);
     const q = result.rows[0];
     logger.info('quiz_generate.completed', {
@@ -259,6 +277,7 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
       createdAt: q.created_at,
       pinned: q.pinned,
       pinnedAt: q.pinned_at,
+      groupId: q.group_id,
       contextUsed: llm.contextUsed
     });
   } catch (error) {
@@ -275,8 +294,8 @@ app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
   }
-  const { title, pinned } = parsed.data;
-  if (typeof title === 'undefined' && typeof pinned === 'undefined') {
+  const { title, pinned, groupId } = parsed.data;
+  if (typeof title === 'undefined' && typeof pinned === 'undefined' && typeof groupId === 'undefined') {
     return res.status(400).json({ error: 'No updates requested' });
   }
   const updates: string[] = [];
@@ -289,12 +308,23 @@ app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
     params.push(pinned);
     updates.push(`pinned = $${params.length}`);
     updates.push(`pinned_at = ${pinned ? 'NOW()' : 'NULL'}`);
+    if (pinned) {
+      updates.push(`group_id = NULL`);
+    }
+  }
+  if (typeof groupId !== 'undefined') {
+    params.push(groupId);
+    updates.push(`group_id = $${params.length}`);
+    if (groupId !== null) {
+      updates.push(`pinned = false`);
+      updates.push(`pinned_at = NULL`);
+    }
   }
   params.push(id);
   const { rows } = await pool.query(`
     UPDATE quizzes SET ${updates.join(', ')}
-    WHERE id = $${params.length}
-    RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at
+    WHERE id = $${params.length} AND deleted_at IS NULL
+    RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
   `, params);
   if (!rows[0]) {
     return res.status(404).json({ error: 'Quiz not found' });
@@ -304,7 +334,8 @@ app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
     quizId: q.id,
     fields: {
       title: typeof title !== 'undefined',
-      pinned: typeof pinned !== 'undefined'
+      pinned: typeof pinned !== 'undefined',
+      groupId: typeof groupId !== 'undefined'
     }
   });
   return res.json({
@@ -315,17 +346,242 @@ app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
     questions: q.questions,
     createdAt: q.created_at,
     pinned: q.pinned,
-    pinnedAt: q.pinned_at
+    pinnedAt: q.pinned_at,
+    groupId: q.group_id
   });
 }));
 
 app.delete('/api/quizzes/:id', asyncRoute(async (req, res) => {
-  const { rowCount } = await pool.query('DELETE FROM quizzes WHERE id = $1', [req.params.id]);
+  const { rowCount } = await pool.query(
+    'UPDATE quizzes SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
+    [req.params.id]
+  );
   if (!rowCount) {
     return res.status(404).json({ error: 'Quiz not found' });
   }
   logger.info('quiz_deleted', { quizId: req.params.id });
   return res.status(204).send();
+}));
+
+app.post('/api/quizzes/:id/regenerate', generateLimiter, asyncRoute(async (req, res) => {
+  const { id } = req.params;
+  const parsed = regenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+  }
+  const { settings: newSettings, prompt, mode } = parsed.data;
+
+  const { rows } = await pool.query(
+    'SELECT id, title, topic, settings, questions, group_id FROM quizzes WHERE id = $1 AND deleted_at IS NULL',
+    [id]
+  );
+  if (!rows[0]) {
+    return res.status(404).json({ error: 'Quiz not found' });
+  }
+  const quiz = rows[0];
+  const settings = newSettings ?? (quiz.settings as QuizSettings);
+  const existingQuestions = quiz.questions as QuizQuestion[];
+
+  const started = Date.now();
+  try {
+    const llm = await generateQuizFromLLM(quiz.topic, settings, {}, existingQuestions, prompt);
+    
+    if (mode === 'overwrite') {
+      const { rows: updated } = await pool.query(
+        `UPDATE quizzes SET title = $1, settings = $2::jsonb, questions = $3::jsonb
+         WHERE id = $4
+         RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id`,
+        [llm.title, JSON.stringify(settings), JSON.stringify(llm.questions), id]
+      );
+      const q = updated[0];
+      logger.info('quiz_regenerated.overwrite', { quizId: id, questions: llm.questions.length, durationMs: Date.now() - started });
+      return res.json({
+        id: q.id, title: q.title, topic: q.topic, settings: q.settings,
+        questions: q.questions, createdAt: q.created_at, pinned: q.pinned,
+        pinnedAt: q.pinned_at, groupId: q.group_id, contextUsed: llm.contextUsed
+      });
+    } else {
+      const newId = randomUUID();
+      const { rows: inserted } = await pool.query(
+        `INSERT INTO quizzes(id, title, topic, settings, questions, group_id)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+         RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id`,
+        [newId, llm.title, quiz.topic, JSON.stringify(settings), JSON.stringify(llm.questions), quiz.group_id]
+      );
+      const q = inserted[0];
+      logger.info('quiz_regenerated.duplicate', { originalId: id, newId: q.id, questions: llm.questions.length, durationMs: Date.now() - started });
+      return res.status(201).json({
+        id: q.id, title: q.title, topic: q.topic, settings: q.settings,
+        questions: q.questions, createdAt: q.created_at, pinned: q.pinned,
+        pinnedAt: q.pinned_at, groupId: q.group_id, contextUsed: llm.contextUsed
+      });
+    }
+  } catch (error) {
+    logger.error('quiz_regenerate.failed', error, { quizId: id, durationMs: Date.now() - started });
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'Regeneration failed' });
+  }
+}));
+
+app.get('/api/groups', asyncRoute(async (_req, res) => {
+  const { rows } = await pool.query(`
+    SELECT id, name, position, created_at
+    FROM quiz_groups
+    ORDER BY position ASC, created_at ASC
+  `);
+  res.json(rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    position: r.position,
+    createdAt: r.created_at
+  })));
+}));
+
+app.post('/api/groups', asyncRoute(async (req, res) => {
+  const parsed = createGroupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+  }
+  const { rows: maxPos } = await pool.query('SELECT COALESCE(MAX(position), -1)::int AS max_pos FROM quiz_groups');
+  const position = maxPos[0].max_pos + 1;
+  const { rows } = await pool.query(
+    'INSERT INTO quiz_groups(name, position) VALUES ($1, $2) RETURNING id, name, position, created_at',
+    [parsed.data.name, position]
+  );
+  const g = rows[0];
+  logger.info('group_created', { groupId: g.id, name: g.name });
+  return res.status(201).json({ id: g.id, name: g.name, position: g.position, createdAt: g.created_at });
+}));
+
+app.patch('/api/groups/:id', asyncRoute(async (req, res) => {
+  const parsed = updateGroupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+  }
+  const { name, position } = parsed.data;
+  if (typeof name === 'undefined' && typeof position === 'undefined') {
+    return res.status(400).json({ error: 'No updates requested' });
+  }
+  const updates: string[] = [];
+  const params: unknown[] = [];
+  if (typeof name !== 'undefined') {
+    params.push(name);
+    updates.push(`name = $${params.length}`);
+  }
+  if (typeof position !== 'undefined') {
+    params.push(position);
+    updates.push(`position = $${params.length}`);
+  }
+  params.push(req.params.id);
+  const { rows } = await pool.query(
+    `UPDATE quiz_groups SET ${updates.join(', ')} WHERE id = $${params.length} RETURNING id, name, position, created_at`,
+    params
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Group not found' });
+  const g = rows[0];
+  logger.info('group_updated', { groupId: g.id, fields: { name: typeof name !== 'undefined', position: typeof position !== 'undefined' } });
+  return res.json({ id: g.id, name: g.name, position: g.position, createdAt: g.created_at });
+}));
+
+app.delete('/api/groups/:id', asyncRoute(async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM quiz_groups WHERE id = $1', [req.params.id]);
+  if (!rowCount) return res.status(404).json({ error: 'Group not found' });
+  logger.info('group_deleted', { groupId: req.params.id });
+  return res.status(204).send();
+}));
+
+app.post('/api/groups/:id/regenerate', generateLimiter, asyncRoute(async (req, res) => {
+  const { id: groupId } = req.params;
+  const parsed = regenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
+  }
+  const { settings, prompt, mode } = parsed.data;
+  if (!settings) {
+    return res.status(400).json({ error: 'settings is required for group regeneration' });
+  }
+
+  const group = await pool.query('SELECT id, name FROM quiz_groups WHERE id = $1', [groupId]);
+  if (!group.rows[0]) return res.status(404).json({ error: 'Group not found' });
+
+  const { rows: quizzes } = await pool.query(
+    'SELECT id, title, topic, questions FROM quizzes WHERE group_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC',
+    [groupId]
+  );
+  if (quizzes.length === 0) return res.status(400).json({ error: 'Group has no quizzes' });
+
+  const started = Date.now();
+  let targetGroupId: string = groupId;
+
+  if (mode === 'duplicate') {
+    const { rows: maxPos } = await pool.query('SELECT COALESCE(MAX(position), -1)::int AS max_pos FROM quiz_groups');
+    const position = maxPos[0].max_pos + 1;
+    const newName = `${group.rows[0].name} Regen`;
+    const { rows: newGroup } = await pool.query(
+      'INSERT INTO quiz_groups(name, position) VALUES ($1, $2) RETURNING id',
+      [newName, position]
+    );
+    targetGroupId = newGroup[0].id;
+    logger.info('group_regenerate.new_group_created', { originalGroupId: groupId, newGroupId: targetGroupId, name: newName });
+  }
+
+  const results = await Promise.allSettled(quizzes.map(async (quiz) => {
+    const existingQuestions = quiz.questions as QuizQuestion[];
+    const llm = await generateQuizFromLLM(quiz.topic, settings, {}, existingQuestions, prompt);
+
+    if (mode === 'overwrite') {
+      const { rows } = await pool.query(
+        `UPDATE quizzes SET title = $1, settings = $2::jsonb, questions = $3::jsonb WHERE id = $4
+         RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id`,
+        [llm.title, JSON.stringify(settings), JSON.stringify(llm.questions), quiz.id]
+      );
+      return rows[0];
+    } else {
+      const newId = randomUUID();
+      const { rows } = await pool.query(
+        `INSERT INTO quizzes(id, title, topic, settings, questions, group_id)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+         RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id`,
+        [newId, llm.title, quiz.topic, JSON.stringify(settings), JSON.stringify(llm.questions), targetGroupId]
+      );
+      return rows[0];
+    }
+  }));
+
+  const succeeded: Array<{ value: { id: string; title: string; topic: string; settings: QuizSettings; questions: QuizQuestion[]; created_at: string; pinned: boolean; pinned_at: string | null; group_id: string | null } }> = [];
+  const failed: Array<{ reason: unknown }> = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') succeeded.push(r);
+    else failed.push(r);
+  }
+
+  logger.info('group_regenerate.completed', {
+    groupId,
+    mode,
+    targetGroupId,
+    total: quizzes.length,
+    succeeded: succeeded.length,
+    failed: failed.length,
+    durationMs: Date.now() - started
+  });
+
+  if (failed.length > 0 && succeeded.length === 0) {
+    return res.status(422).json({ error: `All ${quizzes.length} quizzes failed to regenerate. First error: ${failed[0].reason instanceof Error ? failed[0].reason.message : 'unknown'}` });
+  }
+
+  const regeneratedQuizzes = succeeded.map((r) => {
+    const q = r.value;
+    return {
+      id: q.id, title: q.title, topic: q.topic, settings: q.settings,
+      questions: q.questions, createdAt: q.created_at, pinned: q.pinned,
+      pinnedAt: q.pinned_at, groupId: q.group_id
+    };
+  });
+
+  return res.json({
+    groupId: targetGroupId,
+    quizzes: regeneratedQuizzes,
+    errors: failed.map((f) => f.reason instanceof Error ? f.reason.message : 'unknown error')
+  });
 }));
 
 app.post('/api/attempts', asyncRoute(async (req, res) => {
@@ -383,7 +639,7 @@ app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
   const { id } = req.params;
   const { rows } = await pool.query(`
     SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at,
-           q.title, q.topic, q.settings, q.questions, q.pinned
+           q.title, q.topic, q.settings, q.questions, q.pinned, q.deleted_at
     FROM attempts a
     JOIN quizzes q ON q.id = a.quiz_id
     WHERE a.id = $1
@@ -406,6 +662,7 @@ app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
       settings: r.settings,
       questions: r.questions,
       pinned: r.pinned,
+      deletedAt: r.deleted_at,
     }
   });
 }));
@@ -434,7 +691,7 @@ app.get('/api/results/history', asyncRoute(async (req, res) => {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const { rows } = await pool.query(`
-    SELECT a.id, a.quiz_id, a.score, a.total, a.started_at, a.completed_at, a.guest_name, q.title
+    SELECT a.id, a.quiz_id, a.score, a.total, a.started_at, a.completed_at, a.guest_name, q.title, q.deleted_at
     FROM attempts a
     JOIN quizzes q ON q.id = a.quiz_id
     ${where}
@@ -451,6 +708,7 @@ app.get('/api/results/history', asyncRoute(async (req, res) => {
     startedAt: r.started_at,
     completedAt: r.completed_at,
     guestName: r.guest_name ?? null,
+    quizDeleted: r.deleted_at !== null,
     timeTakenSeconds: Math.max(0, Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000))
   })));
 }));
@@ -461,7 +719,8 @@ app.get('/api/results/metrics', asyncRoute(async (_req, res) => {
     pool.query('SELECT quiz_id, score, total, completed_at FROM attempts ORDER BY completed_at ASC')
   ]);
 
-  const totalQuizzes = quizzes.rowCount ?? 0;
+  const activeQuizzes = quizzes.rows.filter((q) => true);
+  const totalQuizzes = activeQuizzes.length;
   const totalAttempts = attempts.rowCount ?? 0;
   const percentages = attempts.rows.map((a) => (a.total ? (a.score / a.total) * 100 : 0));
   const averageScore = percentages.length ? percentages.reduce((sum, p) => sum + p, 0) / percentages.length : 0;
@@ -576,18 +835,19 @@ app.get('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
 app.get('/api/shares', asyncRoute(async (_req, res) => {
   const { rows } = await pool.query(`
     SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
-           q.title AS quiz_title,
+           q.title AS quiz_title, q.deleted_at AS quiz_deleted_at,
            COUNT(a.id)::int AS attempt_count
     FROM quiz_shares s
     JOIN quizzes q ON q.id = s.quiz_id
     LEFT JOIN attempts a ON a.share_id = s.id
-    GROUP BY s.id, q.title
+    GROUP BY s.id, q.title, q.deleted_at
     ORDER BY s.created_at DESC
   `);
   return res.json(rows.map((s) => ({
     id: s.id, quizId: s.quiz_id, quizTitle: s.quiz_title, token: s.token,
     guestName: s.guest_name, maxAttempts: s.max_attempts,
-    expiresAt: s.expires_at, createdAt: s.created_at, attemptCount: s.attempt_count
+    expiresAt: s.expires_at, createdAt: s.created_at, attemptCount: s.attempt_count,
+    quizDeleted: s.quiz_deleted_at !== null
   })));
 }));
 

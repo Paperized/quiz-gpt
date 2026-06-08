@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Navigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { ShareDialog } from '../components/ShareDialog';
+import { RegenerateDialog } from '../components/RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
 import { shuffleArray } from '../helpers';
@@ -22,6 +23,7 @@ export function QuizPage() {
   const [viewMode, setViewMode] = useState<'all' | 'one'>(() => (localStorage.getItem('viewMode') as 'all' | 'one') ?? 'all');
   const [singleIndex, setSingleIndex] = useState(0);
   const [showShare, setShowShare] = useState(false);
+  const [showRegenerate, setShowRegenerate] = useState(false);
 
   useEffect(() => { setLocalQuizzes(quizzes); }, [quizzes]);
   useEffect(() => { localStorage.setItem('viewMode', viewMode); }, [viewMode]);
@@ -78,6 +80,7 @@ export function QuizPage() {
   return (
     <>
       {showShare && <ShareDialog quizId={quiz.id} onClose={() => setShowShare(false)} />}
+      {showRegenerate && <RegenerateDialog quiz={quiz} onClose={() => setShowRegenerate(false)} onComplete={() => { setShowRegenerate(false); void reload(); }} />}
       {/* Topbar */}
       <header className="relative flex justify-between items-center h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
         <span className="text-[14px] font-semibold text-on-surface font-geist truncate">{quiz.title}</span>
@@ -97,6 +100,9 @@ export function QuizPage() {
           </button>
           <button onClick={() => setShowShare(true)} className="w-8 h-8 flex items-center justify-center rounded text-text-muted hover:text-secondary hover:bg-surface-variant transition-colors" title="Share">
             <Icon name="share" size={20} />
+          </button>
+          <button onClick={() => setShowRegenerate(true)} className="w-8 h-8 flex items-center justify-center rounded text-text-muted hover:text-secondary hover:bg-surface-variant transition-colors" title="Regenerate">
+            <Icon name="autorenew" size={20} />
           </button>
           <div className="w-px h-6 bg-border-subtle" />
           <button onClick={retake} className="px-4 py-1.5 rounded border border-border-subtle text-text-muted hover:text-secondary hover:border-secondary transition-colors text-[12px] font-medium">

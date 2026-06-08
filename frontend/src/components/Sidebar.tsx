@@ -1,29 +1,238 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Icon } from './Icon';
+import { RegenerateDialog } from './RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
-import type { Quiz } from '../types';
+import type { Quiz, QuizGroup } from '../types';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
+function getCollapsedState(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem('sidebar_collapsed') ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+function setCollapsedState(state: Record<string, boolean>) {
+  localStorage.setItem('sidebar_collapsed', JSON.stringify(state));
+}
+
+function QuizItem({ quiz, activeQuizId, onTogglePin, onDelete, groups, onMoveToGroup, onRemoveFromGroup, onGroupCreated, onRegenerate }: {
+  quiz: Quiz;
+  activeQuizId: string | null;
+  onTogglePin: (quiz: Quiz) => void;
+  onDelete: (quiz: Quiz) => void;
+  groups: QuizGroup[];
+  onMoveToGroup: (quiz: Quiz, groupId: string) => void;
+  onRemoveFromGroup: (quiz: Quiz) => void;
+  onGroupCreated: () => void;
+  onRegenerate: (quiz: Quiz) => void;
+}) {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showMenu]);
+
+  const navigate = useNavigate();
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => navigate(`/quiz/${quiz.id}`)}
+        className={`w-full flex items-center justify-between px-4 py-2 rounded text-left transition-colors duration-200 group ${activeQuizId === quiz.id ? 'bg-surface-container-highest text-on-surface' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {quiz.pinned ? (
+            <Icon name="push_pin" size={16} className="text-secondary shrink-0" />
+          ) : (
+            <Icon name="history" size={16} className="shrink-0" />
+          )}
+          <span className="text-[12px] truncate">{quiz.title}</span>
+        </div>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
+            className="text-text-muted hover:text-on-surface p-0.5"
+          >
+            <Icon name="more_vert" size={14} />
+          </button>
+        </div>
+      </button>
+
+      {showMenu && (
+        <div ref={menuRef} className="absolute right-0 top-full z-50 mt-1 w-48 bg-surface-container border border-border-subtle rounded-lg shadow-xl py-1">
+          {groups.length > 0 && (
+            <>
+              <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider">Move to group</div>
+              {groups.map((g) => (
+                <button
+                  key={g.id}
+                  onClick={() => { onMoveToGroup(quiz, g.id); setShowMenu(false); }}
+                  className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors"
+                >
+                  {g.name}
+                </button>
+              ))}
+              <div className="border-t border-border-subtle my-1" />
+            </>
+          )}
+          <button
+            onClick={() => {
+              const name = prompt('New group name:');
+              if (name?.trim()) {
+                req<QuizGroup>('/api/groups', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ name: name.trim() }),
+                }).then(async (g) => {
+                  onGroupCreated();
+                  await onMoveToGroup(quiz, g.id);
+                });
+              }
+              setShowMenu(false);
+            }}
+            className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+          >
+            <Icon name="create_new_folder" size={14} />
+            Create new group
+          </button>
+          <div className="border-t border-border-subtle my-1" />
+          {quiz.groupId ? (
+            <button
+              onClick={() => { onRemoveFromGroup(quiz); setShowMenu(false); }}
+              className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+            >
+              <Icon name="folder_off" size={14} />
+              Remove from group
+            </button>
+          ) : (
+            <button
+              onClick={() => { onTogglePin(quiz); setShowMenu(false); }}
+              className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+            >
+              <Icon name="push_pin" size={14} fill={quiz.pinned} />
+              {quiz.pinned ? 'Unpin' : 'Pin'}
+            </button>
+          )}
+          <button
+            onClick={() => { onRegenerate(quiz); setShowMenu(false); }}
+            className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+          >
+            <Icon name="autorenew" size={14} />
+            Regenerate
+          </button>
+          <button
+            onClick={() => { onDelete(quiz); setShowMenu(false); }}
+            className="w-full text-left px-3 py-1.5 text-[12px] text-error hover:bg-surface-variant transition-colors flex items-center gap-2"
+          >
+            <Icon name="delete" size={14} />
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GroupHeader({ group, onRename, onDelete, onRegenerate }: {
+  group: QuizGroup;
+  onRename: (group: QuizGroup) => void;
+  onDelete: (group: QuizGroup) => void;
+  onRegenerate: (group: QuizGroup) => void;
+}) {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showMenu]);
+
+  return (
+    <div className="relative flex items-center justify-between px-1">
+      <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em]">{group.name}</h3>
+      <button
+        onClick={() => setShowMenu(!showMenu)}
+        className="text-text-muted hover:text-on-surface p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+      >
+        <Icon name="more_vert" size={14} />
+      </button>
+      {showMenu && (
+        <div ref={menuRef} className="absolute right-0 top-full z-50 mt-1 w-36 bg-surface-container border border-border-subtle rounded-lg shadow-xl py-1">
+          <button
+            onClick={() => { onRename(group); setShowMenu(false); }}
+            className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+          >
+            <Icon name="edit" size={14} />
+            Rename
+          </button>
+          <button
+            onClick={() => { onRegenerate(group); setShowMenu(false); }}
+            className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
+          >
+            <Icon name="autorenew" size={14} />
+            Regenerate group
+          </button>
+          <button
+            onClick={() => { onDelete(group); setShowMenu(false); }}
+            className="w-full text-left px-3 py-1.5 text-[12px] text-error hover:bg-surface-variant transition-colors flex items-center gap-2"
+          >
+            <Icon name="delete" size={14} />
+            Delete group
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { quizzes, reload } = useQuizzes();
+  const { quizzes, groups, reload, reloadGroups } = useQuizzes();
   const navigate = useNavigate();
   const location = useLocation();
+  const [collapsed, setCollapsed] = useState(getCollapsedState);
+  const [regenerateTarget, setRegenerateTarget] = useState<{ quiz?: Quiz; group?: QuizGroup; quizzes?: Quiz[] } | null>(null);
 
-  const pinnedQuizzes = useMemo(() => quizzes.filter((q) => q.pinned), [quizzes]);
+  const pinnedQuizzes = useMemo(() => quizzes.filter((q) => q.pinned && !q.groupId), [quizzes]);
   const recentQuizzes = useMemo(
-    () => [...quizzes].filter((q) => !q.pinned).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 6),
+    () => [...quizzes].filter((q) => !q.pinned && !q.groupId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 6),
     [quizzes]
   );
+  const groupedQuizzes = useMemo(() => {
+    const map = new Map<string, Quiz[]>();
+    for (const q of quizzes) {
+      if (q.groupId) {
+        const arr = map.get(q.groupId) ?? [];
+        arr.push(q);
+        map.set(q.groupId, arr);
+      }
+    }
+    return map;
+  }, [quizzes]);
 
   const isResults = location.pathname === '/results';
   const isShares = location.pathname === '/shares';
   const activeQuizId = location.pathname.startsWith('/quiz/') ? location.pathname.split('/')[2] : null;
 
-  async function togglePin(quiz: Quiz, e: React.MouseEvent) {
-    e.stopPropagation();
+  async function togglePin(quiz: Quiz) {
     await req<Quiz>(`/api/quizzes/${quiz.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -32,23 +241,82 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     await reload();
   }
 
-  async function deleteQuiz(quiz: Quiz, e: React.MouseEvent) {
-    e.stopPropagation();
+  async function deleteQuiz(quiz: Quiz) {
     if (!confirm(`Delete "${quiz.title}"?`)) return;
     await req<void>(`/api/quizzes/${quiz.id}`, { method: 'DELETE' });
     if (activeQuizId === quiz.id) navigate('/');
     await reload();
   }
 
-  function goQuiz(id: string) {
-    navigate(`/quiz/${id}`);
-    onClose();
+  async function moveToGroup(quiz: Quiz, groupId: string) {
+    await req<Quiz>(`/api/quizzes/${quiz.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId }),
+    });
+    await reload();
+  }
+
+  async function removeFromGroup(quiz: Quiz) {
+    await req<Quiz>(`/api/quizzes/${quiz.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: null }),
+    });
+    await reload();
+  }
+
+  async function renameGroup(group: QuizGroup) {
+    const name = prompt('Rename group:', group.name);
+    if (name?.trim() && name.trim() !== group.name) {
+      await req(`/api/groups/${group.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      await reloadGroups();
+    }
+  }
+
+  async function deleteGroup(group: QuizGroup) {
+    if (!confirm(`Delete group "${group.name}"? Quizzes will become ungrouped.`)) return;
+    await req<void>(`/api/groups/${group.id}`, { method: 'DELETE' });
+    await reloadGroups();
+    await reload();
+  }
+
+  async function createGroup() {
+    const name = prompt('New group name:');
+    if (name?.trim()) {
+      await req<QuizGroup>('/api/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      await reloadGroups();
+    }
+  }
+
+  function toggleCollapse(groupId: string) {
+    const next = { ...collapsed, [groupId]: !collapsed[groupId] };
+    setCollapsed(next);
+    setCollapsedState(next);
   }
 
   return (
-    <nav
-      className={`w-[280px] h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-sidebar flex flex-col z-50 transition-transform duration-200 ${open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
-    >
+    <>
+      {regenerateTarget && (
+        <RegenerateDialog
+          quiz={regenerateTarget.quiz}
+          group={regenerateTarget.group}
+          quizzes={regenerateTarget.quizzes}
+          onClose={() => setRegenerateTarget(null)}
+          onComplete={() => { setRegenerateTarget(null); void reload(); void reloadGroups(); }}
+        />
+      )}
+      <nav
+        className={`w-[280px] h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-sidebar flex flex-col z-50 transition-transform duration-200 ${open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
+      >
       <div className="flex flex-col h-full overflow-y-auto">
         {/* Header */}
         <div className="px-6 py-6 flex items-center gap-3 border-b border-border-subtle/50">
@@ -96,62 +364,129 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </ul>
         </div>
 
+        {/* Groups */}
+        {groups.length > 0 && (
+          <div className="mt-3 px-4">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <button
+                onClick={() => toggleCollapse('__groups__')}
+                className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] hover:text-on-surface transition-colors"
+              >
+                Groups {collapsed['__groups__'] ? `(${groups.length})` : ''}
+              </button>
+              <button
+                onClick={() => void createGroup()}
+                className="text-text-muted hover:text-secondary p-0.5"
+                title="New group"
+              >
+                <Icon name="add" size={14} />
+              </button>
+            </div>
+            {!collapsed['__groups__'] && (
+              <div className="flex flex-col gap-2">
+                {groups.map((group) => {
+                  const groupQuizzes = groupedQuizzes.get(group.id) ?? [];
+                  const isCollapsed = collapsed[group.id] ?? false;
+                  return (
+                    <div key={group.id} className="group">
+                      <button
+                        onClick={() => toggleCollapse(group.id)}
+                        className="w-full flex items-center gap-2 px-1 py-1 text-left hover:bg-surface-variant rounded transition-colors"
+                      >
+                        <Icon name={isCollapsed ? 'chevron_right' : 'expand_more'} size={16} className="text-text-muted shrink-0" />
+                        <span className="text-[12px] font-medium text-on-surface truncate flex-1">{group.name}</span>
+                        <span className="text-[10px] text-text-muted shrink-0">{groupQuizzes.length}</span>
+                        <GroupHeader group={group} onRename={renameGroup} onDelete={deleteGroup} onRegenerate={(g) => setRegenerateTarget({ group: g, quizzes: groupedQuizzes.get(g.id) ?? [] })} />
+                      </button>
+                      {!isCollapsed && groupQuizzes.length > 0 && (
+                        <ul className="flex flex-col gap-1 ml-4 mt-1">
+                          {groupQuizzes.map((quiz) => (
+                            <li key={quiz.id}>
+                              <QuizItem
+                                quiz={quiz}
+                                activeQuizId={activeQuizId}
+                                onTogglePin={togglePin}
+                                onDelete={deleteQuiz}
+                                groups={groups}
+                                onMoveToGroup={moveToGroup}
+                                onRemoveFromGroup={removeFromGroup}
+                                onGroupCreated={reloadGroups}
+                                onRegenerate={(q) => setRegenerateTarget({ quiz: q })}
+                              />
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Pinned */}
         {pinnedQuizzes.length > 0 && (
-          <div className="mt-6 px-4">
-            <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] mb-2 px-1">Pinned</h3>
-            <ul className="flex flex-col gap-1">
-              {pinnedQuizzes.map((quiz) => (
-                <li key={quiz.id}>
-                  <button
-                    onClick={() => goQuiz(quiz.id)}
-                    className={`w-full flex items-center justify-between px-4 py-2 rounded text-left transition-colors duration-200 group ${activeQuizId === quiz.id ? 'bg-surface-container-highest text-on-surface' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Icon name="push_pin" size={16} className="text-secondary shrink-0" />
-                      <span className="text-[12px] truncate">{quiz.title}</span>
-                    </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button onClick={(e) => void togglePin(quiz, e)} className="text-text-muted hover:text-secondary p-0.5">
-                        <Icon name="push_pin" size={14} fill />
-                      </button>
-                      <button onClick={(e) => void deleteQuiz(quiz, e)} className="text-text-muted hover:text-error p-0.5">
-                        <Icon name="delete" size={14} />
-                      </button>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+          <div className="mt-3 px-4">
+            <button
+              onClick={() => toggleCollapse('__pinned__')}
+              className="w-full text-left px-1 py-1 mb-1"
+            >
+              <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] hover:text-on-surface transition-colors">
+                Pinned {collapsed['__pinned__'] ? `(${pinnedQuizzes.length})` : ''}
+              </h3>
+            </button>
+            {!collapsed['__pinned__'] && (
+              <ul className="flex flex-col gap-1 ml-4">
+                {pinnedQuizzes.map((quiz) => (
+                  <li key={quiz.id}>
+                    <QuizItem
+                      quiz={quiz}
+                      activeQuizId={activeQuizId}
+                      onTogglePin={togglePin}
+                      onDelete={deleteQuiz}
+                      groups={groups}
+                      onMoveToGroup={moveToGroup}
+                      onRemoveFromGroup={removeFromGroup}
+                      onGroupCreated={reloadGroups}
+                      onRegenerate={(q) => setRegenerateTarget({ quiz: q })}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
         {/* Recent */}
-        <div className="mt-6 px-4 flex-1">
-          <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] mb-2 px-1">Recent</h3>
-          <ul className="flex flex-col gap-1">
-            {recentQuizzes.map((quiz) => (
-              <li key={quiz.id}>
-                <button
-                  onClick={() => goQuiz(quiz.id)}
-                  className={`w-full flex items-center justify-between px-4 py-2 rounded text-left transition-colors duration-200 group ${activeQuizId === quiz.id ? 'bg-surface-container-highest text-on-surface' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Icon name="history" size={16} className="shrink-0" />
-                    <span className="text-[12px] truncate">{quiz.title}</span>
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <button onClick={(e) => void togglePin(quiz, e)} className="text-text-muted hover:text-secondary p-0.5">
-                      <Icon name="push_pin" size={14} />
-                    </button>
-                    <button onClick={(e) => void deleteQuiz(quiz, e)} className="text-text-muted hover:text-error p-0.5">
-                      <Icon name="delete" size={14} />
-                    </button>
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+        <div className="mt-3 px-4 flex-1">
+          <button
+            onClick={() => toggleCollapse('__recent__')}
+            className="w-full text-left px-1 py-1 mb-1"
+          >
+            <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em] hover:text-on-surface transition-colors">
+              Recent {collapsed['__recent__'] ? `(${recentQuizzes.length})` : ''}
+            </h3>
+          </button>
+          {!collapsed['__recent__'] && (
+            <ul className="flex flex-col gap-1 ml-4">
+              {recentQuizzes.map((quiz) => (
+                <li key={quiz.id}>
+                  <QuizItem
+                    quiz={quiz}
+                    activeQuizId={activeQuizId}
+                    onTogglePin={togglePin}
+                    onDelete={deleteQuiz}
+                    groups={groups}
+                    onMoveToGroup={moveToGroup}
+                    onRemoveFromGroup={removeFromGroup}
+                    onGroupCreated={reloadGroups}
+                    onRegenerate={(q) => setRegenerateTarget({ quiz: q })}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* Footer */}
@@ -166,5 +501,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </div>
     </nav>
+    </>
   );
 }

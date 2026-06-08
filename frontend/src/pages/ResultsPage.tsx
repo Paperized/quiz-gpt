@@ -175,7 +175,10 @@ export function ResultsPage() {
                   return (
                     <div key={h.id} onClick={() => navigate(`/review/${h.id}`)} className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle hover:bg-surface-variant/30 transition-colors items-center last:border-b-0 cursor-pointer group">
                       <div className="col-span-4 flex flex-col">
-                        <span className="text-[14px] text-on-surface font-medium group-hover:text-accent-teal transition-colors">{h.quizTitle}</span>
+                        <span className="text-[14px] text-on-surface font-medium group-hover:text-accent-teal transition-colors flex items-center gap-2">
+                          {h.quizTitle}
+                          {h.quizDeleted && <span className="px-1.5 py-0.5 rounded bg-surface-bright text-text-muted text-[9px] uppercase tracking-wider font-medium">Deleted</span>}
+                        </span>
                         <span className="text-[12px] text-text-muted">{h.score}/{h.total} questions</span>
                       </div>
                       <div className="col-span-2 hidden sm:flex items-center gap-1.5">

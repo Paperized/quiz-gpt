@@ -80,7 +80,9 @@ function sanitizeQuestions(
 export async function generateQuizFromLLM(
   topic: string,
   settings: QuizSettings,
-  sources: SourceInputs
+  sources: SourceInputs,
+  existingQuestions?: QuizQuestion[],
+  regenerationPrompt?: string
 ): Promise<{ title: string; questions: QuizQuestion[]; contextUsed: boolean; }> {
   const cfg = await getEffectiveSettings();
 
@@ -99,6 +101,7 @@ export async function generateQuizFromLLM(
     settings,
     contextUsed: Boolean(retrievedContext),
     contextChars: retrievedContext.length,
+    isRegeneration: Boolean(existingQuestions),
     provider: {
       style: cfg.LLM_API_STYLE,
       baseUrl: cfg.LLM_BASE_URL,
@@ -108,23 +111,44 @@ export async function generateQuizFromLLM(
     }
   });
 
-  const system = [
-    'You are a quiz generator.',
-    'Return only structured JSON that conforms to the requested schema.',
-    'Questions must be answerable from the topic and provided source material when available.',
-    'Do not invent unsupported facts when the source material is provided.'
-  ].join(' ');
+  const isRegeneration = existingQuestions && existingQuestions.length > 0;
+  
+  const system = isRegeneration
+    ? [
+        'You are a quiz regenerator.',
+        'Return only structured JSON that conforms to the requested schema.',
+        'Generate variants of the existing questions provided below.',
+        'If an additional instruction is provided and relevant to this topic, incorporate it; otherwise ignore it.',
+        'Questions must be answerable from the topic and provided source material when available.',
+        'Do not invent unsupported facts when the source material is provided.'
+      ].join(' ')
+    : [
+        'You are a quiz generator.',
+        'Return only structured JSON that conforms to the requested schema.',
+        'Questions must be answerable from the topic and provided source material when available.',
+        'Do not invent unsupported facts when the source material is provided.'
+      ].join(' ');
+
+  const existingQuestionsText = isRegeneration
+    ? `Existing questions to generate variants of:\n${JSON.stringify(existingQuestions, null, 2)}`
+    : '';
+
+  const regenerationPromptText = regenerationPrompt && isRegeneration
+    ? `Additional instruction: ${regenerationPrompt}`
+    : '';
 
   const prompt = [
     `Topic: ${topic}`,
     `Constraints: ${settingsSummary}`,
+    existingQuestionsText,
+    regenerationPromptText,
     'Output schema:',
     '{"title": string, "questions": [{"question": string, "choices": string[], "correctIndex": number, "explanation"?: string}]}',
     'For true_false mode, choices must be exactly ["True", "False"].',
     retrievedContext
       ? `Source material (retrieved excerpts):\n${retrievedContext}`
       : 'No source material provided. Use your general knowledge for the requested topic.'
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 
   let generated: z.infer<typeof outputSchema>;
   try {

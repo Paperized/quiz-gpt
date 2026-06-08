@@ -24,7 +24,15 @@ export type Quiz = {
   createdAt: string;
   pinned: boolean;
   pinnedAt: string | null;
+  groupId: string | null;
   contextUsed?: boolean;
+};
+
+export type QuizGroup = {
+  id: string;
+  name: string;
+  position: number;
+  createdAt: string;
 };
 
 export type AttemptHistory = {
@@ -37,6 +45,7 @@ export type AttemptHistory = {
   completedAt: string;
   timeTakenSeconds: number;
   guestName: string | null;
+  quizDeleted: boolean;
 };
 
 export type QuizShare = {
@@ -49,6 +58,7 @@ export type QuizShare = {
   expiresAt: string | null;
   createdAt: string;
   attemptCount: number;
+  quizDeleted: boolean;
 };
 
 // Public (guest) quiz types — questions without correctIndex/explanation

@@ -95,7 +95,10 @@ export function SharesPage() {
               return (
                 <div key={share.id} className={`grid grid-cols-12 gap-4 p-4 border-b border-border-subtle last:border-b-0 items-center transition-colors ${inactive ? 'opacity-50' : 'hover:bg-surface-variant/20'}`}>
                   <div className="col-span-3 flex flex-col min-w-0">
-                    <span className="text-[13px] text-on-surface font-medium truncate">{share.quizTitle ?? '—'}</span>
+                    <span className="text-[13px] text-on-surface font-medium truncate flex items-center gap-1.5">
+                      {share.quizTitle ?? '—'}
+                      {share.quizDeleted && <span className="px-1.5 py-0.5 rounded bg-surface-bright text-text-muted text-[9px] uppercase tracking-wider font-medium shrink-0">Deleted</span>}
+                    </span>
                     <span className="text-[11px] text-text-muted">{new Date(share.createdAt).toLocaleDateString()}</span>
                   </div>
                   <div className="col-span-2 flex items-center gap-1.5 min-w-0">
