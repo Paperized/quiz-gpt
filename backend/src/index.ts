@@ -79,7 +79,7 @@ app.use((req, res, next) => {
 
   const header = req.headers.authorization;
   if (!header?.startsWith('Basic ')) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="learn-gpt"');
+    res.setHeader('WWW-Authenticate', 'Basic realm="quiz-gpt"');
     return res.status(401).send('Authentication required');
   }
 
@@ -95,7 +95,7 @@ app.use((req, res, next) => {
     return next();
   }
 
-  res.setHeader('WWW-Authenticate', 'Basic realm="learn-gpt"');
+  res.setHeader('WWW-Authenticate', 'Basic realm="quiz-gpt"');
   return res.status(401).send('Authentication required');
 });
 

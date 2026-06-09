@@ -186,7 +186,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
-    'User-Agent': 'learn-gpt'
+    'User-Agent': 'quiz-gpt'
   };
   if (config.GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${config.GITHUB_TOKEN}`;
@@ -255,7 +255,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
     const safePath = entry.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     const rawUrl = `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${safeRef}/${safePath}`;
     assertAllowedUrl(rawUrl);
-    const fileRes = await fetch(rawUrl, { headers: { 'User-Agent': 'learn-gpt' } });
+    const fileRes = await fetch(rawUrl, { headers: { 'User-Agent': 'quiz-gpt' } });
     if (!fileRes.ok) continue;
 
     const contentType = fileRes.headers.get('content-type');
