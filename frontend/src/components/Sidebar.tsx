@@ -167,16 +167,26 @@ function GroupHeader({ group, onRename, onDelete, onRegenerate }: {
   }, [showMenu]);
 
   return (
-    <div className="relative flex items-center justify-between px-1">
-      <h3 className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em]">{group.name}</h3>
+    <div
+      className="relative shrink-0"
+      onClick={(e) => e.stopPropagation()}
+    >
       <button
-        onClick={() => setShowMenu(!showMenu)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowMenu(!showMenu);
+        }}
         className="text-text-muted hover:text-on-surface p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
       >
         <Icon name="more_vert" size={14} />
       </button>
       {showMenu && (
-        <div ref={menuRef} className="absolute right-0 top-full z-50 mt-1 w-36 bg-surface-container border border-border-subtle rounded-lg shadow-xl py-1">
+        <div
+          ref={menuRef}
+          className="absolute right-0 top-full z-50 mt-1 w-36 bg-surface-container border border-border-subtle rounded-lg shadow-xl py-1"
+          onClick={(e) => e.stopPropagation()}
+        >
           <button
             onClick={() => { onRename(group); setShowMenu(false); }}
             className="w-full text-left px-3 py-1.5 text-[12px] text-text-muted hover:text-on-surface hover:bg-surface-variant transition-colors flex items-center gap-2"
