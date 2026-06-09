@@ -26,6 +26,7 @@ export const configSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(300),
   GENERATE_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(20),
+  MULTI_SELECT_PENALTY_ALPHA: z.coerce.number().positive().default(1),
   // Master key used to encrypt secret fields stored in app_settings table.
   // Generate with: openssl rand -hex 32
   SETTINGS_ENCRYPTION_KEY: z.string().optional()

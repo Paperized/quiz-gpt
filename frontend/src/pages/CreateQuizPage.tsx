@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
+import { GenerationProgressDialog, GenerationStatusPanel, useGenerationJob } from '../components/RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
 import { defaultSettings } from '../helpers';
-import type { Quiz, QuizSettings } from '../types';
+import type { JobCreatedResponse, Quiz, QuizSettings } from '../types';
 
 // ─── Create Quiz Page ('/') ────────────────────────────────────────────────────
 
@@ -18,9 +19,40 @@ export function CreateQuizPage() {
   const [sourceText, setSourceText] = useState('');
   const [githubRepoUrl, setGithubRepoUrl] = useState('');
   const [documents, setDocuments] = useState<File[]>([]);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const { job, pollError } = useGenerationJob<Quiz>(jobId);
+  const loadingLabel = job
+    ? job.totalCount !== null && job.doneCount !== null
+      ? `${job.currentStep} (${job.doneCount}/${job.totalCount})`
+      : job.currentStep
+    : 'Generating quiz...';
+  const showProgressOverlay = loading || job?.status === 'queued' || job?.status === 'running';
+
+  useEffect(() => {
+    if (!job) return;
+    if (job.status === 'completed' && job.resultPayload) {
+      setLoading(false);
+      void reload().then(() => navigate(`/quiz/${job.resultPayload!.id}`));
+    } else if (job.status === 'failed') {
+      setLoading(false);
+      setError(job.error ?? 'Failed to generate quiz');
+    }
+  }, [job, navigate, reload]);
+
+  function validateSettings() {
+    if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) {
+      setError('True/False requires 2 choices');
+      return false;
+    }
+    if (settings.questionType === 'multi_select' && settings.choicesPerQuestion < 4) {
+      setError('Multi Select requires at least 4 choices');
+      return false;
+    }
+    return true;
+  }
 
   async function generate() {
-    if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) { setError('True/False requires 2 choices'); return; }
+    if (!validateSettings()) return;
     setLoading(true); setError(null);
     try {
       const form = new FormData();
@@ -29,12 +61,10 @@ export function CreateQuizPage() {
       if (sourceText.trim()) form.append('sourceText', sourceText.trim());
       if (githubRepoUrl.trim()) form.append('githubRepoUrl', githubRepoUrl.trim());
       for (const f of documents) form.append('documents', f);
-      const quiz = await req<Quiz>('/api/quizzes/generate', { method: 'POST', body: form });
-      await reload();
-      navigate(`/quiz/${quiz.id}`);
+      const response = await req<JobCreatedResponse>('/api/jobs/quizzes/generate', { method: 'POST', body: form });
+      setJobId(response.jobId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to generate quiz');
-    } finally {
       setLoading(false);
     }
   }
@@ -165,10 +195,19 @@ export function CreateQuizPage() {
                   value={settings.questionType}
                   onChange={(e) => {
                     const qt = e.target.value as QuizSettings['questionType'];
-                    setSettings({ ...settings, questionType: qt, choicesPerQuestion: qt === 'true_false' ? 2 : settings.choicesPerQuestion });
+                    setSettings({
+                      ...settings,
+                      questionType: qt,
+                      choicesPerQuestion: qt === 'true_false'
+                        ? 2
+                        : qt === 'multi_select'
+                          ? Math.max(4, settings.choicesPerQuestion)
+                          : settings.choicesPerQuestion
+                    });
                   }}
                 >
                   <option value="multiple_choice">Multiple Choice</option>
+                  <option value="multi_select">Multi Select</option>
                   <option value="true_false">True / False</option>
                   <option value="mixed">Mixed</option>
                 </select>
@@ -179,7 +218,7 @@ export function CreateQuizPage() {
                 <div className="space-y-2">
                   <label className="text-[12px] font-medium text-on-surface block font-geist">Choices per Question</label>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setSettings({ ...settings, choicesPerQuestion: Math.max(2, settings.choicesPerQuestion - 1) })} className="w-8 h-8 rounded border border-border-subtle flex items-center justify-center text-text-muted hover:border-outline-variant">-</button>
+                    <button onClick={() => setSettings({ ...settings, choicesPerQuestion: Math.max(settings.questionType === 'multi_select' ? 4 : 2, settings.choicesPerQuestion - 1) })} className="w-8 h-8 rounded border border-border-subtle flex items-center justify-center text-text-muted hover:border-outline-variant">-</button>
                     <span className="w-12 text-center text-[14px] text-on-surface">{settings.choicesPerQuestion}</span>
                     <button onClick={() => setSettings({ ...settings, choicesPerQuestion: Math.min(6, settings.choicesPerQuestion + 1) })} className="w-8 h-8 rounded border border-border-subtle flex items-center justify-center text-text-muted hover:border-outline-variant">+</button>
                   </div>
@@ -207,6 +246,13 @@ export function CreateQuizPage() {
               <div className="bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{error}</div>
             )}
 
+            <GenerationStatusPanel
+              job={job}
+              pollError={pollError}
+              idleLabel="Ready to generate"
+              successLabel="Quiz created"
+            />
+
             <button
               disabled={loading || !topic.trim()}
               onClick={() => void generate()}
@@ -218,7 +264,7 @@ export function CreateQuizPage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                     <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Generating quiz...
+                  {loadingLabel}
                 </>
               ) : (
                 <>
@@ -234,6 +280,12 @@ export function CreateQuizPage() {
           <p className="text-[12px] text-text-muted">Powered by AI · Review outputs before sharing</p>
         </div>
       </div>
+      <GenerationProgressDialog
+        job={job}
+        pollError={pollError}
+        open={showProgressOverlay}
+        title="Generating Quiz"
+      />
     </div>
   );
 }

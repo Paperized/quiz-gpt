@@ -8,6 +8,7 @@ import { ResultsPage } from './pages/ResultsPage';
 import { SharesPage } from './pages/SharesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { GuestQuizPage } from './pages/GuestQuizPage';
+import { GroupQuizWizardPage } from './pages/GroupQuizWizardPage';
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,7 @@ function AppRouter() {
       <Layout>
         <Routes>
           <Route path="/" element={<CreateQuizPage />} />
+          <Route path="/group-quiz/new" element={<GroupQuizWizardPage />} />
           <Route path="/quiz/:id" element={<QuizPage />} />
           <Route path="/review/:attemptId" element={<ReviewPage />} />
           <Route path="/results" element={<ResultsPage />} />

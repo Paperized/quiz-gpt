@@ -1,5 +1,6 @@
 export type Difficulty = 'Easy' | 'Medium' | 'Hard';
-export type QuestionType = 'multiple_choice' | 'true_false' | 'mixed';
+export type QuestionType = 'multiple_choice' | 'true_false' | 'mixed' | 'multi_select';
+export type ResponseType = 'single_choice' | 'multi_select';
 
 export interface QuizSettings {
   numQuestions: number;
@@ -10,10 +11,17 @@ export interface QuizSettings {
 }
 
 export interface QuizQuestion {
+  id: string;
   question: string;
   choices: string[];
-  correctIndex: number;
+  responseType: ResponseType;
+  correctAnswers: number[];
   explanation?: string;
+}
+
+export interface AttemptAnswer {
+  questionId: string;
+  selectedAnswers: number[];
 }
 
 export interface Quiz {
@@ -30,7 +38,7 @@ export interface Quiz {
 export interface Attempt {
   id: string;
   quizId: string;
-  answers: number[];
+  answers: AttemptAnswer[];
   score: number;
   total: number;
   startedAt: string;

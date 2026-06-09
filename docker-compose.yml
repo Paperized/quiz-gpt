@@ -4,6 +4,7 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     environment:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/itas-zscaler-root-ca.pem
       PORT: ${PORT}
       PUBLIC_URL: ${PUBLIC_URL}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -29,6 +30,8 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       MAX_RETRIEVED_CHUNKS: ${MAX_RETRIEVED_CHUNKS}
       MAX_RETRIEVED_CHARS: ${MAX_RETRIEVED_CHARS}
+    volumes:
+      - /home/test/Lavoro/ITAS/tobe/cert.cer:/etc/ssl/certs/itas-zscaler-root-ca.pem:ro
     depends_on:
       db:
         condition: service_healthy

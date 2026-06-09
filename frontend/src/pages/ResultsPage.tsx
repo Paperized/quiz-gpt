@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { req } from '../api';
-import { scoreColor, formatSeconds } from '../helpers';
+import { scoreColor, formatScore, formatSeconds } from '../helpers';
 import type { AttemptHistory, Metrics } from '../types';
 
 // ─── Results Page (/results) ──────────────────────────────────────────────────
@@ -67,7 +67,7 @@ export function ResultsPage() {
 
     for (const h of history) {
       const pct = h.total ? (h.score / h.total) * 100 : 0;
-      bestByQuiz.set(h.quizId, Math.max(bestByQuiz.get(h.quizId) ?? 0, pct));
+      bestByQuiz.set(h.quizId, Math.max(bestByQuiz.get(h.quizId) ?? Number.NEGATIVE_INFINITY, pct));
       countByQuiz.set(h.quizId, (countByQuiz.get(h.quizId) ?? 0) + 1);
       const trend = trendByQuiz.get(h.quizId) ?? { quizTitle: h.quizTitle, points: [] };
       trend.points.push({ completedAt: h.completedAt, scorePercent: pct });
@@ -98,6 +98,11 @@ export function ResultsPage() {
   }, [filteredMetrics]);
 
   const trendPoints = trendQuizId && filteredMetrics?.trendByQuiz[trendQuizId]?.points;
+
+  function chartY(scorePercent: number) {
+    const clamped = Math.max(-100, Math.min(100, scorePercent));
+    return 100 - ((clamped + 100) / 2);
+  }
 
   function userLabel(u: string) {
     return u === '__you__' ? 'You' : u;
@@ -172,6 +177,7 @@ export function ResultsPage() {
                   <div className="p-8 text-center text-text-muted text-[14px]">No attempts yet. Generate and take a quiz first!</div>
                 ) : history.map((h) => {
                   const pct = Math.round((h.score / h.total) * 100);
+                  const widthPct = Math.max(0, Math.min(100, pct));
                   return (
                     <div key={h.id} onClick={() => navigate(`/review/${h.id}`)} className="grid grid-cols-12 gap-4 p-4 border-b border-border-subtle hover:bg-surface-variant/30 transition-colors items-center last:border-b-0 cursor-pointer group">
                       <div className="col-span-4 flex flex-col">
@@ -179,7 +185,7 @@ export function ResultsPage() {
                           {h.quizTitle}
                           {h.quizDeleted && <span className="px-1.5 py-0.5 rounded bg-surface-bright text-text-muted text-[9px] uppercase tracking-wider font-medium">Deleted</span>}
                         </span>
-                        <span className="text-[12px] text-text-muted">{h.score}/{h.total} questions</span>
+                        <span className="text-[12px] text-text-muted">{formatScore(h.score)}/{h.total} score</span>
                       </div>
                       <div className="col-span-2 hidden sm:flex items-center gap-1.5">
                         {h.guestName ? (
@@ -195,7 +201,7 @@ export function ResultsPage() {
                       <div className="col-span-2 flex items-center gap-2">
                         <span className={`text-[14px] font-medium ${scoreColor(pct)}`}>{pct}%</span>
                         <div className="w-12 h-1.5 bg-surface-bright rounded-full hidden lg:block overflow-hidden">
-                          <div className={`h-full rounded-full ${pct >= 80 ? 'bg-success' : pct >= 60 ? 'bg-yellow-400' : 'bg-error'}`} style={{ width: `${pct}%` }} />
+                          <div className={`h-full rounded-full ${pct >= 80 ? 'bg-success' : pct >= 60 ? 'bg-yellow-400' : 'bg-error'}`} style={{ width: `${widthPct}%` }} />
                         </div>
                       </div>
                       <div className="col-span-2 text-right flex items-center justify-end gap-1 text-[14px] text-text-muted">
@@ -249,9 +255,9 @@ export function ResultsPage() {
                               <stop offset="100%" stopColor="#10A37F" stopOpacity="0" />
                             </linearGradient>
                           </defs>
-                          <polygon fill="url(#chartGrad)" points={`0,100 ${trendPoints.map((p, i) => `${(i / Math.max(trendPoints.length - 1, 1)) * 100},${100 - p.scorePercent}`).join(' ')} ${100},100`} />
-                          <polyline fill="none" stroke="#10A37F" strokeWidth="1.5" strokeLinejoin="round" points={trendPoints.map((p, i) => `${(i / Math.max(trendPoints.length - 1, 1)) * 100},${100 - p.scorePercent}`).join(' ')} />
-                          {trendPoints.map((p, i) => <circle key={i} cx={(i / Math.max(trendPoints.length - 1, 1)) * 100} cy={100 - p.scorePercent} r="2" fill="#141313" stroke="#10A37F" strokeWidth="1.5" />)}
+                          <polygon fill="url(#chartGrad)" points={`0,100 ${trendPoints.map((p, i) => `${(i / Math.max(trendPoints.length - 1, 1)) * 100},${chartY(p.scorePercent)}`).join(' ')} ${100},100`} />
+                          <polyline fill="none" stroke="#10A37F" strokeWidth="1.5" strokeLinejoin="round" points={trendPoints.map((p, i) => `${(i / Math.max(trendPoints.length - 1, 1)) * 100},${chartY(p.scorePercent)}`).join(' ')} />
+                          {trendPoints.map((p, i) => <circle key={i} cx={(i / Math.max(trendPoints.length - 1, 1)) * 100} cy={chartY(p.scorePercent)} r="2" fill="#141313" stroke="#10A37F" strokeWidth="1.5" />)}
                         </svg>
                       </div>
                     </div>
@@ -267,7 +273,7 @@ export function ResultsPage() {
                           <span className="text-[14px] text-on-surface">{b.quizTitle}</span>
                           <div className="flex items-center gap-3">
                             <div className="w-24 h-1.5 bg-surface-bright rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${b.bestScore >= 80 ? 'bg-success' : b.bestScore >= 60 ? 'bg-yellow-400' : 'bg-error'}`} style={{ width: `${b.bestScore}%` }} />
+                              <div className={`h-full rounded-full ${b.bestScore >= 80 ? 'bg-success' : b.bestScore >= 60 ? 'bg-yellow-400' : 'bg-error'}`} style={{ width: `${Math.max(0, Math.min(100, b.bestScore))}%` }} />
                             </div>
                             <span className={`text-[14px] font-bold ${scoreColor(b.bestScore)}`}>{b.bestScore.toFixed(0)}%</span>
                           </div>

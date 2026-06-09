@@ -2,18 +2,24 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { req } from '../api';
-import { scoreColor } from '../helpers';
-import type { GuestQuizData, GuestAttemptResult } from '../types';
+import { formatScore, scoreColor } from '../helpers';
+import type { GuestQuizData, GuestAttemptResult, PublicQuestion } from '../types';
 
-// ─── Guest Quiz Page (/public/s/:token) ──────────────────────────────────────
-// Fullscreen, no sidebar, no auth
+function selectionMark(question: PublicQuestion, selected: boolean, highlighted: boolean) {
+  const boxShape = question.responseType === 'multi_select' ? 'rounded-sm' : 'rounded-full';
+  return (
+    <div className={`w-4 h-4 border relative shrink-0 ${boxShape} ${selected || highlighted ? 'border-secondary' : 'border-outline'}`}>
+      {(selected || highlighted) && <span className={`absolute inset-0.5 bg-secondary block ${boxShape}`} />}
+    </div>
+  );
+}
 
 export function GuestQuizPage() {
   const { token } = useParams<{ token: string }>();
   const [quizData, setQuizData] = useState<GuestQuizData | null>(null);
   const [phase, setPhase] = useState<'loading' | 'error' | 'intro' | 'quiz' | 'result'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
-  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [answers, setAnswers] = useState<Record<string, number[]>>({});
   const [startedAt, setStartedAt] = useState('');
   const [result, setResult] = useState<GuestAttemptResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,15 +39,31 @@ export function GuestQuizPage() {
     setPhase('quiz');
   }
 
+  function updateAnswer(question: PublicQuestion, choiceIndex: number) {
+    setAnswers((prev) => {
+      const current = prev[question.id] ?? [];
+      const next = question.responseType === 'multi_select'
+        ? (current.includes(choiceIndex)
+          ? current.filter((index) => index !== choiceIndex)
+          : [...current, choiceIndex].sort((a, b) => a - b))
+        : [choiceIndex];
+
+      return { ...prev, [question.id]: next };
+    });
+  }
+
   async function submit() {
     if (!quizData) return;
     setSubmitting(true);
     try {
-      const answersArr = quizData.questions.map((_, i) => answers[i] ?? -1);
+      const payload = quizData.questions.map((question) => ({
+        questionId: question.id,
+        selectedAnswers: answers[question.id] ?? []
+      }));
       const res = await req<GuestAttemptResult>(`/public/api/s/${token}/attempt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers: answersArr, startedAt, completedAt: new Date().toISOString() }),
+        body: JSON.stringify({ answers: payload, startedAt, completedAt: new Date().toISOString() }),
       });
       setResult(res);
       setPhase('result');
@@ -115,7 +137,7 @@ export function GuestQuizPage() {
 
   if (phase === 'quiz' && quizData) {
     const totalQ = quizData.questions.length;
-    const answeredCount = Object.keys(answers).length;
+    const answeredCount = quizData.questions.filter((question) => (answers[question.id] ?? []).length > 0).length;
     const questionsToRender = viewMode === 'all' ? quizData.questions : [quizData.questions[singleIndex]];
 
     return (
@@ -156,11 +178,11 @@ export function GuestQuizPage() {
 
             {viewMode === 'one' && (
               <div className="flex items-center justify-between mb-6">
-                <button onClick={() => setSingleIndex((i) => Math.max(0, i - 1))} disabled={singleIndex === 0} className="flex items-center gap-1 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface disabled:opacity-30 transition-colors">
+                <button onClick={() => setSingleIndex((index) => Math.max(0, index - 1))} disabled={singleIndex === 0} className="flex items-center gap-1 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface disabled:opacity-30 transition-colors">
                   <Icon name="arrow_back" size={16} /> Prev
                 </button>
                 <span className="text-[12px] text-text-muted">Question {singleIndex + 1} of {totalQ}</span>
-                <button onClick={() => setSingleIndex((i) => Math.min(totalQ - 1, i + 1))} disabled={singleIndex === totalQ - 1} className="flex items-center gap-1 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface disabled:opacity-30 transition-colors">
+                <button onClick={() => setSingleIndex((index) => Math.min(totalQ - 1, index + 1))} disabled={singleIndex === totalQ - 1} className="flex items-center gap-1 px-3 py-1.5 border border-border-subtle rounded text-[12px] text-text-muted hover:text-on-surface disabled:opacity-30 transition-colors">
                   Next <Icon name="arrow_forward" size={16} />
                 </button>
               </div>
@@ -169,26 +191,36 @@ export function GuestQuizPage() {
             {errorMsg && <div className="mb-4 bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{errorMsg}</div>}
 
             <div className="flex flex-col gap-4">
-              {questionsToRender.map((q, localIdx) => {
+              {questionsToRender.map((question, localIdx) => {
                 const idx = viewMode === 'all' ? localIdx : singleIndex;
-                const selected = answers[idx];
+                const selected = answers[question.id] ?? [];
                 const isActive = viewMode === 'one';
+
                 return (
-                  <div key={`${idx}-${q.question}`} className={`rounded-lg p-6 transition-colors ${isActive ? 'question-active' : 'border border-border-subtle hover:border-outline-variant'}`} style={{ backgroundColor: cardBg }}>
+                  <div key={question.id} className={`rounded-lg p-6 transition-colors ${isActive ? 'question-active' : 'border border-border-subtle hover:border-outline-variant'}`} style={{ backgroundColor: cardBg }}>
                     <div className="flex items-start gap-3 mb-4">
                       <span className={`font-mono text-sm mt-0.5 shrink-0 ${isActive ? 'text-secondary' : 'text-text-muted'}`}>{String(idx + 1).padStart(2, '0')}</span>
-                      <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                      <div className="flex-1">
+                        <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{question.question}</h3>
+                        <span className="inline-block mt-2 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
+                          {question.responseType === 'multi_select' ? 'Multi Select' : 'Single Choice'}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex flex-col gap-3 ml-8">
-                      {q.choices.map((choice, cIdx) => {
-                        const isSelected = selected === cIdx;
+                      {question.choices.map((choice, choiceIndex) => {
+                        const isSelected = selected.includes(choiceIndex);
                         const cls = `flex items-center gap-4 p-4 rounded border cursor-pointer transition-colors group ${isSelected ? 'quiz-option-selected' : 'border-border-subtle hover:bg-surface-variant'}`;
                         return (
-                          <label key={cIdx} className={cls}>
-                            <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isSelected ? 'border-secondary' : 'border-outline'}`}>
-                              {isSelected && <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />}
-                            </div>
-                            <input type="radio" name={`q-${idx}`} checked={isSelected} onChange={() => setAnswers((prev) => ({ ...prev, [idx]: cIdx }))} className="hidden" />
+                          <label key={choiceIndex} className={cls}>
+                            {selectionMark(question, isSelected, false)}
+                            <input
+                              type={question.responseType === 'multi_select' ? 'checkbox' : 'radio'}
+                              name={`q-${question.id}`}
+                              checked={isSelected}
+                              onChange={() => updateAnswer(question, choiceIndex)}
+                              className="hidden"
+                            />
                             <span className={`text-[14px] ${isSelected ? 'text-on-surface' : 'text-on-surface-variant group-hover:text-on-surface'}`}>{choice}</span>
                           </label>
                         );
@@ -225,7 +257,7 @@ export function GuestQuizPage() {
             <span className="text-[14px] font-semibold text-on-surface font-geist">{quizData.title}</span>
           </div>
           <span className={`px-4 py-1.5 rounded text-[12px] font-bold ${scoreColor(pct)}`} style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>
-            {result.score}/{result.total} · {pct}%
+            {formatScore(result.score)}/{result.total} · {pct}%
           </span>
         </header>
 
@@ -234,45 +266,53 @@ export function GuestQuizPage() {
             <div className="mb-10 p-6 rounded-xl border border-border-subtle text-center space-y-2" style={{ backgroundColor: cardBg }}>
               <p className="text-[13px] text-text-muted uppercase tracking-widest font-geist">Your Score</p>
               <div className={`text-[56px] font-bold font-geist ${scoreColor(pct)}`}>{pct}%</div>
-              <p className="text-[16px] text-text-muted">{result.score} out of {result.total} correct</p>
+              <p className="text-[16px] text-text-muted">{formatScore(result.score)} out of {result.total} score</p>
               <p className="text-[13px] text-text-muted">Well done, {quizData.guestName}!</p>
             </div>
 
             <div className="flex flex-col gap-4">
-              {result.questions.map((q, idx) => {
-                const isCorrect = (cIdx: number) => cIdx === q.correctIndex;
-                const isWrong = (cIdx: number) => q.userAnswer === cIdx && cIdx !== q.correctIndex;
-                const skipped = q.userAnswer === -1;
+              {result.questions.map((question, idx) => {
+                const correctSet = new Set(question.correctAnswers);
+                const selectedSet = new Set(question.userAnswers);
+                const skipped = question.userAnswers.length === 0;
                 return (
-                  <div key={idx} className="rounded-lg p-6 border border-border-subtle" style={{ backgroundColor: cardBg }}>
+                  <div key={question.id} className="rounded-lg p-6 border border-border-subtle" style={{ backgroundColor: cardBg }}>
                     <div className="flex items-start gap-3 mb-4">
                       <span className="font-mono text-sm text-text-muted mt-0.5 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
-                      <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                      <div className="flex-1">
+                        <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{question.question}</h3>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
+                            {question.responseType === 'multi_select' ? 'Multi Select' : 'Single Choice'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
+                            {formatScore(question.questionScore)} point
+                          </span>
+                        </div>
+                      </div>
                       {skipped && <span className="ml-auto shrink-0 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px]">Skipped</span>}
                     </div>
                     <div className="flex flex-col gap-3 ml-8">
-                      {q.choices.map((choice, cIdx) => {
+                      {question.choices.map((choice, choiceIndex) => {
+                        const isCorrect = correctSet.has(choiceIndex);
+                        const isWrong = selectedSet.has(choiceIndex) && !isCorrect;
                         let cls = 'flex items-center gap-4 p-4 rounded border transition-colors';
-                        if (isCorrect(cIdx)) cls += ' quiz-option-correct';
-                        else if (isWrong(cIdx)) cls += ' quiz-option-wrong';
+                        if (isCorrect) cls += ' quiz-option-correct';
+                        else if (isWrong) cls += ' quiz-option-wrong';
                         else cls += ' border-border-subtle opacity-50';
                         return (
-                          <div key={cIdx} className={cls}>
-                            <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isCorrect(cIdx) ? 'border-secondary' : 'border-outline'}`}>
-                              {(q.userAnswer === cIdx || isCorrect(cIdx)) && (
-                                <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />
-                              )}
-                            </div>
-                            <span className={`text-[14px] flex-1 ${isCorrect(cIdx) ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
-                            {isCorrect(cIdx) && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
-                            {isWrong(cIdx) && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
+                          <div key={choiceIndex} className={cls}>
+                            {selectionMark(question, selectedSet.has(choiceIndex), isCorrect)}
+                            <span className={`text-[14px] flex-1 ${isCorrect ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
+                            {isCorrect && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
+                            {isWrong && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
                           </div>
                         );
                       })}
                     </div>
-                    {q.explanation && (
+                    {question.explanation && (
                       <div className="mt-4 ml-8 p-3 bg-surface-container rounded border border-border-subtle">
-                        <p className="text-[13px] text-text-muted"><span className="text-secondary font-medium mr-1">Explanation:</span>{q.explanation}</p>
+                        <p className="text-[13px] text-text-muted"><span className="text-secondary font-medium mr-1">Explanation:</span>{question.explanation}</p>
                       </div>
                     )}
                   </div>

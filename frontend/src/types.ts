@@ -5,13 +5,15 @@ export type QuizSettings = {
   choicesPerQuestion: number;
   difficulty: 'Easy' | 'Medium' | 'Hard';
   language: string;
-  questionType: 'multiple_choice' | 'true_false' | 'mixed';
+  questionType: 'multiple_choice' | 'true_false' | 'mixed' | 'multi_select';
 };
 
 export type QuizQuestion = {
+  id: string;
   question: string;
+  responseType: 'single_choice' | 'multi_select';
   choices: string[];
-  correctIndex: number;
+  correctAnswers: number[];
   explanation?: string;
 };
 
@@ -33,6 +35,56 @@ export type QuizGroup = {
   name: string;
   position: number;
   createdAt: string;
+};
+
+export type GroupQuizProposalItem = {
+  title: string;
+  focus: string;
+};
+
+export type GroupQuizProposal = {
+  groupTitle: string;
+  items: GroupQuizProposalItem[];
+};
+
+export type GroupQuizGenerationError = {
+  itemTitle: string;
+  message: string;
+};
+
+export type GroupQuizGenerationResult = {
+  groupId: string;
+  quizzes: Quiz[];
+  errors: GroupQuizGenerationError[];
+};
+
+export type GenerationJobKind =
+  | 'quiz_generate'
+  | 'group_propose'
+  | 'group_generate'
+  | 'quiz_regenerate'
+  | 'group_regenerate';
+
+export type GenerationJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export type GenerationJob<T = unknown> = {
+  id: string;
+  kind: GenerationJobKind;
+  status: GenerationJobStatus;
+  currentStep: string;
+  stepIndex: number;
+  stepTotal: number;
+  doneCount: number | null;
+  totalCount: number | null;
+  message: string | null;
+  resultPayload: T | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type JobCreatedResponse = {
+  jobId: string;
 };
 
 export type AttemptHistory = {
@@ -63,7 +115,9 @@ export type QuizShare = {
 
 // Public (guest) quiz types — questions without correctIndex/explanation
 export type PublicQuestion = {
+  id: string;
   question: string;
+  responseType: 'single_choice' | 'multi_select';
   choices: string[];
 };
 
@@ -85,11 +139,14 @@ export type GuestAttemptResult = {
   startedAt: string;
   completedAt: string;
   questions: Array<{
+    id: string;
     question: string;
+    responseType: 'single_choice' | 'multi_select';
     choices: string[];
-    correctIndex: number;
+    correctAnswers: number[];
     explanation?: string;
-    userAnswer: number;
+    userAnswers: number[];
+    questionScore: number;
   }>;
 };
 
@@ -105,11 +162,12 @@ export type Metrics = {
 export type AttemptReview = {
   id: string;
   quizId: string;
-  answers: number[];
+  answers: number[][];
   score: number;
   total: number;
   startedAt: string;
   completedAt: string;
+  questionScores: number[];
   timeTakenSeconds: number;
   quiz: Quiz;
 };

@@ -4,21 +4,10 @@ import { Icon } from './Icon';
 import { RegenerateDialog } from './RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
-import type { Quiz, QuizGroup } from '../types';
+import { getSidebarCollapsedState, setSidebarCollapsedState } from '../helpers';
+import type { GroupQuizGenerationResult, Quiz, QuizGroup } from '../types';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
-
-function getCollapsedState(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem('sidebar_collapsed') ?? '{}');
-  } catch {
-    return {};
-  }
-}
-
-function setCollapsedState(state: Record<string, boolean>) {
-  localStorage.setItem('sidebar_collapsed', JSON.stringify(state));
-}
 
 function QuizItem({ quiz, activeQuizId, onTogglePin, onDelete, groups, onMoveToGroup, onRemoveFromGroup, onGroupCreated, onRegenerate }: {
   quiz: Quiz;
@@ -33,11 +22,17 @@ function QuizItem({ quiz, activeQuizId, onTogglePin, onDelete, groups, onMoveToG
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!showMenu) return;
     function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(target) &&
+        !triggerRef.current?.contains(target)
+      ) {
         setShowMenu(false);
       }
     }
@@ -63,6 +58,7 @@ function QuizItem({ quiz, activeQuizId, onTogglePin, onDelete, groups, onMoveToG
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
           <button
+            ref={triggerRef}
             onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
             className="text-text-muted hover:text-on-surface p-0.5"
           >
@@ -73,10 +69,10 @@ function QuizItem({ quiz, activeQuizId, onTogglePin, onDelete, groups, onMoveToG
 
       {showMenu && (
         <div ref={menuRef} className="absolute right-0 top-full z-50 mt-1 w-48 bg-surface-container border border-border-subtle rounded-lg shadow-xl py-1">
-          {groups.length > 0 && (
+          {groups.some((g) => g.id !== quiz.groupId) && (
             <>
               <div className="px-3 py-1.5 text-[10px] font-bold text-text-muted uppercase tracking-wider">Move to group</div>
-              {groups.map((g) => (
+              {groups.filter((g) => g.id !== quiz.groupId).map((g) => (
                 <button
                   key={g.id}
                   onClick={() => { onMoveToGroup(quiz, g.id); setShowMenu(false); }}
@@ -154,11 +150,17 @@ function GroupHeader({ group, onRename, onDelete, onRegenerate }: {
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!showMenu) return;
     function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(target) &&
+        !triggerRef.current?.contains(target)
+      ) {
         setShowMenu(false);
       }
     }
@@ -172,6 +174,7 @@ function GroupHeader({ group, onRename, onDelete, onRegenerate }: {
       onClick={(e) => e.stopPropagation()}
     >
       <button
+        ref={triggerRef}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -218,7 +221,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const { quizzes, groups, reload, reloadGroups } = useQuizzes();
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState(getCollapsedState);
+  const [collapsed, setCollapsed] = useState(getSidebarCollapsedState);
   const [regenerateTarget, setRegenerateTarget] = useState<{ quiz?: Quiz; group?: QuizGroup; quizzes?: Quiz[] } | null>(null);
 
   const pinnedQuizzes = useMemo(() => quizzes.filter((q) => q.pinned && !q.groupId), [quizzes]);
@@ -289,7 +292,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   }
 
   async function deleteGroup(group: QuizGroup) {
-    if (!confirm(`Delete group "${group.name}"? Quizzes will become ungrouped.`)) return;
+    const quizCount = groupedQuizzes.get(group.id)?.length ?? 0;
+    if (!confirm(`Delete group "${group.name}"? This will remove ${quizCount} quiz${quizCount === 1 ? '' : 'zes'}.`)) return;
     await req<void>(`/api/groups/${group.id}`, { method: 'DELETE' });
     await reloadGroups();
     await reload();
@@ -310,8 +314,18 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   function toggleCollapse(groupId: string) {
     const next = { ...collapsed, [groupId]: !collapsed[groupId] };
     setCollapsed(next);
-    setCollapsedState(next);
+    setSidebarCollapsedState(next);
   }
+
+  useEffect(() => {
+    function syncCollapsedState(event: Event) {
+      const customEvent = event as CustomEvent<Record<string, boolean>>;
+      setCollapsed(customEvent.detail ?? getSidebarCollapsedState());
+    }
+
+    window.addEventListener('sidebar-collapsed-change', syncCollapsedState);
+    return () => window.removeEventListener('sidebar-collapsed-change', syncCollapsedState);
+  }, []);
 
   return (
     <>
@@ -321,7 +335,26 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           group={regenerateTarget.group}
           quizzes={regenerateTarget.quizzes}
           onClose={() => setRegenerateTarget(null)}
-          onComplete={() => { setRegenerateTarget(null); void reload(); void reloadGroups(); }}
+          onComplete={(result) => {
+            setRegenerateTarget(null);
+            void reload();
+            void reloadGroups();
+            if (result && 'quizzes' in result && Array.isArray(result.quizzes)) {
+              const groupResult = result as GroupQuizGenerationResult;
+              setSidebarCollapsedState({
+                ...getSidebarCollapsedState(),
+                __groups__: false,
+                [groupResult.groupId]: false
+              });
+              if (groupResult.quizzes[0]) {
+                navigate(`/quiz/${groupResult.quizzes[0].id}`);
+              }
+              return;
+            }
+            if (result && 'id' in result) {
+              navigate(`/quiz/${result.id}`);
+            }
+          }}
         />
       )}
       <nav
@@ -338,15 +371,26 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </button>
         </div>
 
-        {/* New Quiz */}
+        {/* New */}
         <div className="px-4 py-4">
-          <button
-            onClick={() => { navigate('/'); onClose(); }}
-            className="w-full flex items-center justify-center gap-2 bg-accent-teal hover:opacity-90 text-white text-[12px] font-bold py-3 rounded-lg transition-all shadow-sm"
-          >
-            <Icon name="add" size={18} />
-            New Quiz
-          </button>
+          <div className="overflow-hidden rounded-lg border border-secondary/35 bg-accent-teal text-white shadow-sm">
+            <div className="grid grid-cols-2">
+              <button
+                onClick={() => { navigate('/'); onClose(); }}
+                className="flex items-center justify-center gap-2 px-3 py-3 text-[12px] font-bold transition-colors hover:bg-black/10"
+              >
+                <Icon name="bolt" size={18} />
+                New Quiz
+              </button>
+              <button
+                onClick={() => { navigate('/group-quiz/new'); onClose(); }}
+                className="flex items-center justify-center gap-2 border-l border-white/20 bg-black/10 px-3 py-3 text-[12px] font-bold transition-colors hover:bg-black/18"
+              >
+                <Icon name="library_books" size={18} />
+                New Group
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Navigation */}

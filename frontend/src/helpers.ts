@@ -28,3 +28,21 @@ export function scoreColor(pct: number) {
 export function formatSeconds(s: number) {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
+
+export function formatScore(value: number) {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, '');
+}
+
+export function getSidebarCollapsedState(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem('sidebar_collapsed') ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function setSidebarCollapsedState(state: Record<string, boolean>) {
+  localStorage.setItem('sidebar_collapsed', JSON.stringify(state));
+  window.dispatchEvent(new CustomEvent('sidebar-collapsed-change', { detail: state }));
+}

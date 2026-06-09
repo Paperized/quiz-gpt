@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { req } from '../api';
-import { scoreColor, formatSeconds } from '../helpers';
+import { scoreColor, formatScore, formatSeconds } from '../helpers';
 import type { AttemptReview } from '../types';
 
 // ─── Review Page (/review/:attemptId) ────────────────────────────────────────
@@ -38,8 +38,7 @@ export function ReviewPage() {
   );
 
   const { quiz, answers } = attempt;
-  const score = quiz.questions.reduce((acc, q, i) => acc + ((answers[i] ?? -1) === q.correctIndex ? 1 : 0), 0);
-  const pct = Math.round((score / quiz.questions.length) * 100);
+  const pct = Math.round((attempt.score / attempt.total) * 100);
   const completedDate = new Date(attempt.completedAt).toLocaleString();
 
   return (
@@ -53,7 +52,7 @@ export function ReviewPage() {
         <div className="flex items-center gap-3 shrink-0">
           <span className="text-[12px] text-text-muted hidden md:block">{completedDate}</span>
           <span className={`px-4 py-1.5 rounded text-[12px] font-bold ${scoreColor(pct)}`} style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>
-            {score}/{quiz.questions.length} · {pct}%
+            {formatScore(attempt.score)}/{attempt.total} · {pct}%
           </span>
         </div>
       </header>
@@ -75,36 +74,47 @@ export function ReviewPage() {
           {/* Questions — all, read-only */}
           <div className="flex flex-col gap-4">
             {quiz.questions.map((q, idx) => {
-              const selected = answers[idx] ?? -1;
-              const isCorrect = (cIdx: number) => cIdx === q.correctIndex;
-              const isWrong = (cIdx: number) => selected === cIdx && cIdx !== q.correctIndex;
-              const skipped = selected === -1;
+              const selected = answers[idx] ?? [];
+              const correctSet = new Set(q.correctAnswers);
+              const selectedSet = new Set(selected);
+              const skipped = selected.length === 0;
+              const boxShape = q.responseType === 'multi_select' ? 'rounded-sm' : 'rounded-full';
 
               return (
                 <div key={idx} className="rounded-lg p-6 border border-border-subtle" style={{ backgroundColor: '#1c1b1b' }}>
                   <div className="flex items-start gap-3 mb-4">
                     <span className="font-mono text-sm text-text-muted mt-0.5 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
-                    <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                    <div className="flex-1">
+                      <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{q.question}</h3>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
+                          {q.responseType === 'multi_select' ? 'Multi Select' : 'Single Choice'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
+                          {formatScore(attempt.questionScores[idx] ?? 0)} point
+                        </span>
+                      </div>
+                    </div>
                     {skipped && <span className="ml-auto shrink-0 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px]">Skipped</span>}
                   </div>
 
                   <div className="flex flex-col gap-3 ml-8">
                     {q.choices.map((choice, cIdx) => {
                       let cls = 'flex items-center gap-4 p-4 rounded border transition-colors';
-                      if (isCorrect(cIdx)) cls += ' quiz-option-correct';
-                      else if (isWrong(cIdx)) cls += ' quiz-option-wrong';
+                      if (correctSet.has(cIdx)) cls += ' quiz-option-correct';
+                      else if (selectedSet.has(cIdx)) cls += ' quiz-option-wrong';
                       else cls += ' border-border-subtle opacity-50';
 
                       return (
                         <div key={cIdx} className={cls}>
-                          <div className={`w-4 h-4 rounded-full border relative shrink-0 ${isCorrect(cIdx) ? 'border-secondary' : 'border-outline'}`}>
-                            {(selected === cIdx || isCorrect(cIdx)) && (
-                              <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-secondary block" />
+                          <div className={`w-4 h-4 border relative shrink-0 ${boxShape} ${correctSet.has(cIdx) || selectedSet.has(cIdx) ? 'border-secondary' : 'border-outline'}`}>
+                            {(selectedSet.has(cIdx) || correctSet.has(cIdx)) && (
+                              <span className={`absolute inset-0.5 bg-secondary block ${boxShape}`} />
                             )}
                           </div>
-                          <span className={`text-[14px] flex-1 ${isCorrect(cIdx) ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
-                          {isCorrect(cIdx) && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
-                          {isWrong(cIdx) && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
+                          <span className={`text-[14px] flex-1 ${correctSet.has(cIdx) ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
+                          {correctSet.has(cIdx) && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
+                          {selectedSet.has(cIdx) && !correctSet.has(cIdx) && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
                         </div>
                       );
                     })}
@@ -122,7 +132,7 @@ export function ReviewPage() {
 
           {/* Summary */}
           <div className="mt-8 pt-6 border-t border-border-subtle flex justify-between items-center">
-            <span className="text-[12px] text-text-muted">{quiz.questions.filter((_, i) => answers[i] !== undefined && answers[i] !== -1).length} of {quiz.questions.length} answered</span>
+            <span className="text-[12px] text-text-muted">{answers.filter((selected) => selected.length > 0).length} of {quiz.questions.length} answered</span>
             <span className={`text-[14px] font-bold ${scoreColor(pct)}`}>Final Score: {pct}%</span>
           </div>
         </div>
