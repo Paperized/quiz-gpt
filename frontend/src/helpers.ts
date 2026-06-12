@@ -7,7 +7,7 @@ export const defaultSettings: QuizSettings = {
   choicesPerQuestion: 4,
   difficulty: 5,
   language: 'English',
-  questionType: 'mixed',
+  questionType: ['multiple_choice', 'true_false', 'multi_select'],
 };
 
 export function shuffleArray<T>(arr: T[]): T[] {

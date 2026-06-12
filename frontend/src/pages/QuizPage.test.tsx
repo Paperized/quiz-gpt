@@ -25,7 +25,7 @@ const quiz: Quiz = {
     choicesPerQuestion: 4,
     difficulty: 5,
     language: 'English',
-    questionType: 'multiple_choice'
+    questionType: ['multiple_choice']
   },
   questions: [
     {

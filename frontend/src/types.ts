@@ -1,17 +1,20 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export const QUESTION_TYPES = ['multiple_choice', 'true_false', 'multi_select', 'free_text'] as const;
+export type QuestionType = typeof QUESTION_TYPES[number];
+
 export type QuizSettings = {
   numQuestions: number;
   choicesPerQuestion: number;
   difficulty: number;
   language: string;
-  questionType: 'multiple_choice' | 'true_false' | 'mixed' | 'multi_select';
+  questionType: QuestionType[];
 };
 
 export type QuizQuestion = {
   id: string;
   question: string;
-  responseType: 'single_choice' | 'multi_select';
+  responseType: 'single_choice' | 'multi_select' | 'free_text';
   choices: string[];
   correctAnswers: number[];
   explanation?: string;
@@ -117,7 +120,7 @@ export type QuizShare = {
 export type PublicQuestion = {
   id: string;
   question: string;
-  responseType: 'single_choice' | 'multi_select';
+  responseType: 'single_choice' | 'multi_select' | 'free_text';
   choices: string[];
 };
 
@@ -138,14 +141,16 @@ export type GuestAttemptResult = {
   total: number;
   startedAt: string;
   completedAt: string;
+  evaluations: FreeTextEvaluation[] | null;
   questions: Array<{
     id: string;
     question: string;
-    responseType: 'single_choice' | 'multi_select';
+    responseType: 'single_choice' | 'multi_select' | 'free_text';
     choices: string[];
     correctAnswers: number[];
     explanation?: string;
     userAnswers: number[];
+    freeTextAnswer: string | null;
     questionScore: number;
   }>;
 };
@@ -159,15 +164,24 @@ export type Metrics = {
   trendByQuiz: Record<string, { quizTitle: string; points: Array<{ completedAt: string; scorePercent: number }> }>;
 };
 
+export type FreeTextEvaluation = {
+  questionId: string;
+  score: number;
+  explanation: string;
+  optimalAnswer: string;
+};
+
 export type AttemptReview = {
   id: string;
   quizId: string;
   answers: number[][];
+  freeTextAnswers: (string | null)[];
   score: number;
   total: number;
   startedAt: string;
   completedAt: string;
   questionScores: number[];
+  evaluations: FreeTextEvaluation[] | null;
   timeTakenSeconds: number;
   quiz: Quiz;
 };

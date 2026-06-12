@@ -12,10 +12,11 @@ import { difficultySchema } from './difficulty.js';
 import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
-import { generateQuizFromLLM, proposeGroupQuizFromLLM } from './llm.js';
+import { generateQuizFromLLM, proposeGroupQuizFromLLM, evaluateFreeTextAnswers } from './llm.js';
 import { normalizeAttemptAnswers, scoreAttempt } from './scoring.js';
 import { getSettingsForDisplay, initializeSettings, saveSettings, settingsSaveSchema } from './settings.js';
-import type { AttemptAnswer, QuizQuestion, QuizSettings } from './types.js';
+import type { AttemptAnswer, FreeTextEvaluation, QuizQuestion, QuizSettings } from './types.js';
+import { QUESTION_TYPES } from './types.js';
 
 const app = express();
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
@@ -112,15 +113,15 @@ const quizSettingsSchema = z.object({
   choicesPerQuestion: z.number().int().min(2).max(6),
   difficulty: difficultySchema,
   language: z.string().trim().min(2),
-  questionType: z.enum(['multiple_choice', 'true_false', 'mixed', 'multi_select'])
+  questionType: z.array(z.enum(QUESTION_TYPES)).min(1)
 }).superRefine((settings, ctx) => {
-  if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) {
+  if (settings.questionType.includes('true_false') && settings.questionType.length === 1 && settings.choicesPerQuestion !== 2) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'true_false quizzes require choicesPerQuestion = 2'
     });
   }
-  if (settings.questionType === 'multi_select' && settings.choicesPerQuestion < 4) {
+  if (settings.questionType.includes('multi_select') && settings.questionType.length === 1 && settings.choicesPerQuestion < 4) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'multi_select quizzes require choicesPerQuestion >= 4'
@@ -183,7 +184,8 @@ const regenerateSchema = z.object({
 
 const attemptAnswerSchema = z.object({
   questionId: z.string().uuid(),
-  selectedAnswers: z.array(z.number().int().nonnegative())
+  selectedAnswers: z.array(z.number().int().nonnegative()),
+  freeText: z.string().optional()
 });
 
 const createAttemptSchema = z.object({
@@ -1469,7 +1471,7 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
     return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
   }
   const { quizId, answers, startedAt, completedAt } = parsed.data;
-  const quiz = await pool.query('SELECT questions FROM quizzes WHERE id = $1', [quizId]);
+  const quiz = await pool.query('SELECT questions, title, topic FROM quizzes WHERE id = $1', [quizId]);
   const questions = quiz.rows[0]?.questions as QuizQuestion[] | undefined;
   if (!questions) {
     return res.status(404).json({ error: 'Quiz not found' });
@@ -1484,22 +1486,42 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
 
   const total = questions.length;
   const { score } = scoreAttempt(questions, normalizedAnswers, config.MULTI_SELECT_PENALTY_ALPHA);
+
+  const freeTextQuestions = questions.filter((q) => q.responseType === 'free_text');
+  let evaluations: FreeTextEvaluation[] | null = null;
+  let freeTextScore = 0;
+
+  if (freeTextQuestions.length > 0) {
+    const freeTextAnswers = normalizedAnswers
+      .filter((a) => freeTextQuestions.some((q) => q.id === a.questionId))
+      .map((a) => ({ questionId: a.questionId, text: a.freeText ?? '' }));
+    evaluations = await evaluateFreeTextAnswers(freeTextQuestions, freeTextAnswers, {
+      title: quiz.rows[0].title,
+      topic: quiz.rows[0].topic
+    });
+    freeTextScore = evaluations.reduce((sum, e) => sum + e.score, 0);
+  }
+
+  const finalScore = score + freeTextScore;
   const submittedAt = new Date();
   logger.info('attempt_submitted', {
     quizId,
-    score,
+    score: finalScore,
     total,
-    answered: normalizedAnswers.filter((answer) => answer.selectedAnswers.length > 0).length,
+    answered: normalizedAnswers.filter((answer) =>
+      answer.selectedAnswers.length > 0 || (answer.freeText && answer.freeText.trim().length > 0)
+    ).length,
+    freeTextCount: freeTextQuestions.length,
     startedAt,
     completedAt,
     submittedAt: submittedAt.toISOString()
   });
   const id = randomUUID();
   const { rows } = await pool.query(`
-    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at)
-    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at, evaluations)
+    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9::jsonb)
     RETURNING id, quiz_id, answers, score, total, started_at, completed_at, submitted_at
-  `, [id, quizId, JSON.stringify(normalizedAnswers), score, total, startedAt, completedAt, submittedAt]);
+  `, [id, quizId, JSON.stringify(normalizedAnswers), finalScore, total, startedAt, completedAt, submittedAt, evaluations ? JSON.stringify(evaluations) : null]);
   const a = rows[0];
   return res.status(201).json({
     id: a.id,
@@ -1509,14 +1531,15 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
     total: a.total,
     startedAt: a.started_at,
     completedAt: a.completed_at,
-    submittedAt: a.submitted_at
+    submittedAt: a.submitted_at,
+    evaluations
   });
 }));
 
 app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
   const { id } = req.params;
   const { rows } = await pool.query(`
-    SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at,
+    SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at, a.evaluations,
            q.title, q.topic, q.settings, q.questions, q.pinned, q.deleted_at
     FROM attempts a
     JOIN quizzes q ON q.id = a.quiz_id
@@ -1531,11 +1554,13 @@ app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
     id: r.id,
     quizId: r.quiz_id,
     answers: normalizedAnswers.map((answer) => answer.selectedAnswers),
+    freeTextAnswers: normalizedAnswers.map((answer) => answer.freeText ?? null),
     score: r.score,
     total: r.total,
     startedAt: r.started_at,
     completedAt: r.completed_at,
     questionScores,
+    evaluations: r.evaluations as FreeTextEvaluation[] | null,
     timeTakenSeconds: Math.max(0, Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)),
     quiz: {
       id: r.quiz_id,
@@ -1841,24 +1866,43 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
 
     const total = questions.length;
     const { score, questionScores } = scoreAttempt(questions, normalizedAnswers, config.MULTI_SELECT_PENALTY_ALPHA);
-    const submittedAt = new Date();
 
+    const freeTextQuestions = questions.filter((q) => q.responseType === 'free_text');
+    let evaluations: FreeTextEvaluation[] | null = null;
+    let freeTextScore = 0;
+
+    const submittedAt = new Date();
     const id = randomUUID();
+
     const { rows } = await client.query(`
-      INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at, guest_name, share_id)
-      VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
+      INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at, guest_name, share_id, evaluations)
+      VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
       RETURNING id, quiz_id, score, total, started_at, completed_at, submitted_at
-    `, [id, share.quiz_id, JSON.stringify(normalizedAnswers), score, total, startedAt, completedAt, submittedAt, share.guest_name, share.id]);
+    `, [id, share.quiz_id, JSON.stringify(normalizedAnswers), score, total, startedAt, completedAt, submittedAt, share.guest_name, share.id, null]);
 
     await client.query('COMMIT');
 
-    logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score, total });
+    if (freeTextQuestions.length > 0) {
+      const quizInfo = await pool.query('SELECT title, topic FROM quizzes WHERE id = $1', [share.quiz_id]);
+      const freeTextAnswers = normalizedAnswers
+        .filter((a) => freeTextQuestions.some((q) => q.id === a.questionId))
+        .map((a) => ({ questionId: a.questionId, text: a.freeText ?? '' }));
+      evaluations = await evaluateFreeTextAnswers(freeTextQuestions, freeTextAnswers, {
+        title: quizInfo.rows[0].title,
+        topic: quizInfo.rows[0].topic
+      });
+      freeTextScore = evaluations.reduce((sum, e) => sum + e.score, 0);
+      await pool.query('UPDATE attempts SET score = $1, evaluations = $2::jsonb WHERE id = $3', [score + freeTextScore, JSON.stringify(evaluations), id]);
+    }
+
+    const finalScore = score + freeTextScore;
+    logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score: finalScore, total, freeTextCount: freeTextQuestions.length });
 
     const a = rows[0];
     return res.status(201).json({
       id: a.id,
       quizId: a.quiz_id,
-      score: a.score,
+      score: finalScore,
       total: a.total,
       startedAt: a.started_at,
       completedAt: a.completed_at,
@@ -1871,8 +1915,10 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
         correctAnswers: q.correctAnswers,
         explanation: q.explanation,
         userAnswers: normalizedAnswers[i].selectedAnswers,
+        freeTextAnswer: normalizedAnswers[i].freeText ?? null,
         questionScore: questionScores[i]
-      }))
+      })),
+      evaluations
     });
   } catch (err) {
     await client.query('ROLLBACK');

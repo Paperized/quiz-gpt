@@ -14,7 +14,7 @@ const multiSelectSettings: QuizSettings = {
   choicesPerQuestion: 4,
   difficulty: 5,
   language: 'English',
-  questionType: 'multi_select'
+  questionType: ['multi_select']
 };
 
 describe('extractJsonPayload', () => {

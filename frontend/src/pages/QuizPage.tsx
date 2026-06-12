@@ -7,12 +7,13 @@ import { useQuizzes } from '../context';
 import { req } from '../api';
 import { formatScore, shuffleArray } from '../helpers';
 import { formatDifficultyLabel } from '../difficulty';
-import type { Quiz, QuizQuestion } from '../types';
+import type { FreeTextEvaluation, Quiz, QuizQuestion } from '../types';
 
 type DisplayQuestion = QuizQuestion & { choiceOrder: number[] };
 type DisplayQuiz = Omit<Quiz, 'questions'> & { questions: DisplayQuestion[] };
 type QuizDraft = {
   answers: Record<string, number[]>;
+  freeTextAnswers: Record<string, string>;
   startedAt: string;
   singleIndex: number;
 };
@@ -29,6 +30,7 @@ function readQuizDraft(quizId: string): QuizDraft | null {
     if (!parsed || typeof parsed !== 'object' || typeof parsed.startedAt !== 'string' || typeof parsed.singleIndex !== 'number' || typeof parsed.answers !== 'object') {
       return null;
     }
+    if (typeof parsed.freeTextAnswers !== 'object') parsed.freeTextAnswers = {};
     return parsed;
   } catch {
     return null;
@@ -77,8 +79,11 @@ export function QuizPage() {
 
   const [localQuizzes, setLocalQuizzes] = useState<DisplayQuiz[]>(() => quizzes.map(toDisplayQuiz));
   const [answers, setAnswers] = useState<Record<string, number[]>>({});
+  const [freeTextAnswers, setFreeTextAnswers] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
   const [submittedScore, setSubmittedScore] = useState<number | null>(null);
+  const [evaluations, setEvaluations] = useState<FreeTextEvaluation[] | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'one'>(() => (localStorage.getItem('viewMode') as 'all' | 'one') ?? 'all');
@@ -93,24 +98,21 @@ export function QuizPage() {
     if (!id) return;
     const draft = readQuizDraft(id);
     setAnswers(draft?.answers ?? {});
+    setFreeTextAnswers(draft?.freeTextAnswers ?? {});
     setStartedAt(draft?.startedAt ?? new Date().toISOString());
     setSingleIndex(draft?.singleIndex ?? 0);
     setSubmitted(false);
     setSubmittedScore(null);
+    setEvaluations(null);
+    setSubmitting(false);
     setError(null);
   }, [id]);
-  useEffect(() => {
-    scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-  }, [id]);
+
   useEffect(() => {
     if (!id || submitted) return;
-    const draft: QuizDraft = {
-      answers,
-      startedAt,
-      singleIndex
-    };
+    const draft: QuizDraft = { answers, freeTextAnswers, startedAt, singleIndex };
     localStorage.setItem(getQuizDraftStorageKey(id), JSON.stringify(draft));
-  }, [answers, id, singleIndex, startedAt, submitted]);
+  }, [answers, freeTextAnswers, id, singleIndex, startedAt, submitted]);
 
   const quiz = useMemo(() => localQuizzes.find((q) => q.id === id) ?? null, [localQuizzes, id]);
 
@@ -126,7 +128,11 @@ export function QuizPage() {
 
   const questionsToRender = viewMode === 'all' ? quiz.questions : [quiz.questions[singleIndex]];
   const totalQuestions = quiz.questions.length;
-  const answeredCount = quiz.questions.filter((question) => (answers[question.id] ?? []).length > 0).length;
+  const answeredCount = quiz.questions.filter((question) =>
+    question.responseType === 'free_text'
+      ? (freeTextAnswers[question.id] ?? '').trim().length > 0
+      : (answers[question.id] ?? []).length > 0
+  ).length;
 
   function shuffle() {
     const shuffled = shuffleArray(quiz.questions).map((question) => {
@@ -148,8 +154,11 @@ export function QuizPage() {
 
     setLocalQuizzes((prev) => prev.map((entry) => entry.id === quiz.id ? { ...entry, questions: shuffled } : entry));
     setAnswers({});
+    setFreeTextAnswers({});
     setSubmitted(false);
     setSubmittedScore(null);
+    setEvaluations(null);
+    setSubmitting(false);
     setStartedAt(new Date().toISOString());
   }
 
@@ -168,6 +177,11 @@ export function QuizPage() {
     });
   }
 
+  function updateFreeText(questionId: string, text: string) {
+    if (submitted) return;
+    setFreeTextAnswers((prev) => ({ ...prev, [questionId]: text }));
+  }
+
   async function togglePin(e: React.MouseEvent) {
     e.stopPropagation();
     await req<Quiz>(`/api/quizzes/${quiz.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !quiz.pinned }) });
@@ -175,29 +189,38 @@ export function QuizPage() {
   }
 
   async function submit() {
+    setSubmitting(true);
+    setError(null);
     try {
       const payload = quiz.questions.map((question) => ({
         questionId: question.id,
-        selectedAnswers: (answers[question.id] ?? []).map((index) => question.choiceOrder[index])
+        selectedAnswers: (answers[question.id] ?? []).map((index) => question.choiceOrder[index]),
+        freeText: question.responseType === 'free_text' ? (freeTextAnswers[question.id] ?? '') : undefined
       }));
 
-      const result = await req<{ score: number; total: number }>('/api/attempts', {
+      const result = await req<{ score: number; total: number; evaluations: FreeTextEvaluation[] | null }>('/api/attempts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quizId: quiz.id, answers: payload, startedAt, completedAt: new Date().toISOString() }),
       });
       clearQuizDraft(quiz.id);
       setSubmittedScore(result.score);
+      setEvaluations(result.evaluations);
       setSubmitted(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to submit');
+    } finally {
+      setSubmitting(false);
     }
   }
 
   function retake() {
     setAnswers({});
+    setFreeTextAnswers({});
     setSubmitted(false);
     setSubmittedScore(null);
+    setEvaluations(null);
+    setSubmitting(false);
     setStartedAt(new Date().toISOString());
     setSingleIndex(0);
   }
@@ -246,8 +269,13 @@ export function QuizPage() {
             Retake
           </button>
           {!submitted ? (
-            <button onClick={() => void submit()} className="px-4 py-1.5 rounded bg-accent-teal hover:opacity-90 text-white text-[12px] font-medium transition-colors shadow-sm">
-              Submit Quiz
+            <button
+              onClick={() => void submit()}
+              disabled={submitting}
+              className="px-4 py-1.5 rounded bg-accent-teal hover:opacity-90 disabled:opacity-50 text-white text-[12px] font-medium transition-colors shadow-sm flex items-center gap-2"
+            >
+              {submitting && <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>}
+              {submitting ? 'Evaluating...' : 'Submit Quiz'}
             </button>
           ) : (
             <span className="px-4 py-1.5 rounded bg-success/20 text-success text-[12px] font-medium">
@@ -263,7 +291,7 @@ export function QuizPage() {
             <div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{formatDifficultyLabel(quiz.settings.difficulty)}</span>
-                <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.questionType.replace('_', ' ')}</span>
+                <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.questionType.map(t => t.replace('_', ' ')).join(', ')}</span>
                 {quiz.contextUsed && <span className="px-2 py-0.5 rounded-full bg-secondary/20 text-secondary text-[10px] uppercase tracking-wider">Source Context</span>}
               </div>
               <h2 className="text-[32px] font-bold text-on-surface font-geist tracking-tight">{quiz.title}</h2>
@@ -305,12 +333,53 @@ export function QuizPage() {
                         {question.question}
                       </h3>
                       <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
-                        {question.responseType === 'multi_select' ? 'Multi Select' : 'Single Choice'}
+                        {question.responseType === 'multi_select' ? 'Multi Select' : question.responseType === 'free_text' ? 'Free Text' : 'Single Choice'}
                       </span>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-3 ml-8">
-                    {question.choices.map((choice, choiceIndex) => {
+                  {question.responseType === 'free_text' ? (
+                    <div className="flex flex-col gap-3 ml-8">
+                      {!submitted ? (
+                        <textarea
+                          className="w-full bg-[#0D0D0D] border border-border-subtle rounded px-4 py-3 text-[14px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-accent-teal transition-colors resize-y min-h-[120px]"
+                          placeholder="Type your answer..."
+                          value={freeTextAnswers[question.id] ?? ''}
+                          onChange={(e) => updateFreeText(question.id, e.target.value)}
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="p-4 bg-[#0D0D0D] border border-border-subtle rounded">
+                            <p className="text-[11px] text-text-muted mb-1 uppercase tracking-wider">Your answer</p>
+                            <p className="text-[14px] text-on-surface whitespace-pre-wrap">{freeTextAnswers[question.id] ?? '(no answer)'}</p>
+                          </div>
+                          {(() => {
+                            const evaluation = evaluations?.find((e) => e.questionId === question.id);
+                            if (!evaluation) return null;
+                            return (
+                              <div className="space-y-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[12px] text-text-muted">Score:</span>
+                                  <span className={`text-[14px] font-semibold ${evaluation.score >= 0.7 ? 'text-success' : evaluation.score >= 0.4 ? 'text-yellow-400' : 'text-error'}`}>
+                                    {evaluation.score.toFixed(2)} / 1
+                                  </span>
+                                </div>
+                                <div className="p-3 bg-surface-container rounded border border-border-subtle">
+                                  <p className="text-[11px] text-text-muted mb-1 uppercase tracking-wider">Evaluation</p>
+                                  <p className="text-[13px] text-on-surface whitespace-pre-wrap">{evaluation.explanation}</p>
+                                </div>
+                                <div className="p-3 bg-success/5 rounded border border-success/20">
+                                  <p className="text-[11px] text-success mb-1 uppercase tracking-wider">Optimal answer</p>
+                                  <p className="text-[13px] text-on-surface whitespace-pre-wrap">{evaluation.optimalAnswer}</p>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3 ml-8">
+                      {question.choices.map((choice, choiceIndex) => {
                       const isSelected = selected.includes(choiceIndex);
                       const isCorrect = submitted && correctSet.has(choiceIndex);
                       const isWrong = submitted && isSelected && !correctSet.has(choiceIndex);
@@ -341,6 +410,7 @@ export function QuizPage() {
                       );
                     })}
                   </div>
+                  )}
                   {submitted && question.explanation && (
                     <div className="mt-4 ml-8 p-3 bg-surface-container rounded border border-border-subtle">
                       <p className="text-[13px] text-text-muted"><span className="text-secondary font-medium mr-1">Explanation:</span>{question.explanation}</p>

@@ -3,6 +3,7 @@ import type { AttemptAnswer, QuizQuestion } from './types.js';
 export type NormalizedAttemptAnswer = {
   questionId: string;
   selectedAnswers: number[];
+  freeText?: string;
 };
 
 export function normalizeAttemptAnswers(
@@ -26,19 +27,25 @@ export function normalizeAttemptAnswers(
     }
     seen.add(answer.questionId);
 
-    const unique = new Set<number>();
-    for (const selected of answer.selectedAnswers) {
-      if (!Number.isInteger(selected) || selected < 0 || selected >= question.choices.length) {
-        throw new Error('answers include an invalid choice index');
+    if (question.responseType === 'free_text') {
+      if (typeof answer.freeText !== 'string' || answer.freeText.trim().length === 0) {
+        throw new Error('free_text questions require a non-empty freeText answer');
       }
-      if (unique.has(selected)) {
-        throw new Error('answers include a duplicate choice index');
+    } else {
+      const unique = new Set<number>();
+      for (const selected of answer.selectedAnswers) {
+        if (!Number.isInteger(selected) || selected < 0 || selected >= question.choices.length) {
+          throw new Error('answers include an invalid choice index');
+        }
+        if (unique.has(selected)) {
+          throw new Error('answers include a duplicate choice index');
+        }
+        unique.add(selected);
       }
-      unique.add(selected);
-    }
 
-    if (question.responseType === 'single_choice' && answer.selectedAnswers.length > 1) {
-      throw new Error('single choice questions allow at most one selected answer');
+      if (question.responseType === 'single_choice' && answer.selectedAnswers.length > 1) {
+        throw new Error('single choice questions allow at most one selected answer');
+      }
     }
   }
 
@@ -50,12 +57,17 @@ export function normalizeAttemptAnswers(
     const answer = answers.find((entry) => entry.questionId === question.id);
     return {
       questionId: question.id,
-      selectedAnswers: answer?.selectedAnswers ?? []
+      selectedAnswers: answer?.selectedAnswers ?? [],
+      freeText: answer?.freeText
     };
   });
 }
 
 export function scoreQuestion(question: QuizQuestion, selectedAnswers: number[], alpha: number): number {
+  if (question.responseType === 'free_text') {
+    return 0;
+  }
+
   if (question.responseType === 'single_choice') {
     return selectedAnswers.length === 1 && question.correctAnswers.includes(selectedAnswers[0]) ? 1 : 0;
   }

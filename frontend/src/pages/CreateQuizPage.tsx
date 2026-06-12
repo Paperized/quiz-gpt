@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { DifficultyControl } from '../components/DifficultyControl';
+import { QuestionTypeSelect } from '../components/QuestionTypeSelect';
 import { GenerationProgressDialog, GenerationStatusPanel, useGenerationJob } from '../components/RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
@@ -41,11 +42,11 @@ export function CreateQuizPage() {
   }, [job, navigate, reload]);
 
   function validateSettings() {
-    if (settings.questionType === 'true_false' && settings.choicesPerQuestion !== 2) {
+    if (settings.questionType.includes('true_false') && settings.questionType.length === 1 && settings.choicesPerQuestion !== 2) {
       setError('True/False requires 2 choices');
       return false;
     }
-    if (settings.questionType === 'multi_select' && settings.choicesPerQuestion < 4) {
+    if (settings.questionType.includes('multi_select') && settings.questionType.length === 1 && settings.choicesPerQuestion < 4) {
       setError('Multi Select requires at least 4 choices');
       return false;
     }
@@ -181,37 +182,25 @@ export function CreateQuizPage() {
               />
 
               {/* Question type */}
-              <div className="space-y-2">
-                <label className="text-[12px] font-medium text-on-surface block font-geist">Question Type</label>
-                <select
-                  className="w-full bg-surface border border-border-subtle text-on-surface text-[14px] rounded focus:border-secondary focus:ring-0 p-2.5"
-                  value={settings.questionType}
-                  onChange={(e) => {
-                    const qt = e.target.value as QuizSettings['questionType'];
-                    setSettings({
-                      ...settings,
-                      questionType: qt,
-                      choicesPerQuestion: qt === 'true_false'
-                        ? 2
-                        : qt === 'multi_select'
-                          ? Math.max(4, settings.choicesPerQuestion)
-                          : settings.choicesPerQuestion
-                    });
-                  }}
-                >
-                  <option value="multiple_choice">Multiple Choice</option>
-                  <option value="multi_select">Multi Select</option>
-                  <option value="true_false">True / False</option>
-                  <option value="mixed">Mixed</option>
-                </select>
-              </div>
+              <QuestionTypeSelect
+                value={settings.questionType}
+                onChange={(questionType) => setSettings({
+                  ...settings,
+                  questionType,
+                  choicesPerQuestion: questionType.includes('true_false') && questionType.length === 1
+                    ? 2
+                    : questionType.includes('multi_select') && questionType.length === 1
+                      ? Math.max(4, settings.choicesPerQuestion)
+                      : settings.choicesPerQuestion
+                })}
+              />
 
               {/* Choices per question */}
-              {settings.questionType !== 'true_false' && (
+              {!(settings.questionType.length === 1 && (settings.questionType[0] === 'true_false' || settings.questionType[0] === 'free_text')) && (
                 <div className="space-y-2">
                   <label className="text-[12px] font-medium text-on-surface block font-geist">Choices per Question</label>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setSettings({ ...settings, choicesPerQuestion: Math.max(settings.questionType === 'multi_select' ? 4 : 2, settings.choicesPerQuestion - 1) })} className="w-8 h-8 rounded border border-border-subtle flex items-center justify-center text-text-muted hover:border-outline-variant">-</button>
+                    <button onClick={() => setSettings({ ...settings, choicesPerQuestion: Math.max(settings.questionType.includes('multi_select') && settings.questionType.length === 1 ? 4 : 2, settings.choicesPerQuestion - 1) })} className="w-8 h-8 rounded border border-border-subtle flex items-center justify-center text-text-muted hover:border-outline-variant">-</button>
                     <span className="w-12 text-center text-[14px] text-on-surface">{settings.choicesPerQuestion}</span>
                     <button onClick={() => setSettings({ ...settings, choicesPerQuestion: Math.min(6, settings.choicesPerQuestion + 1) })} className="w-8 h-8 rounded border border-border-subtle flex items-center justify-center text-text-muted hover:border-outline-variant">+</button>
                   </div>

@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { req } from '../api';
 import { formatScore, scoreColor } from '../helpers';
-import type { GuestQuizData, GuestAttemptResult, PublicQuestion } from '../types';
+import type { FreeTextEvaluation, GuestQuizData, GuestAttemptResult, PublicQuestion } from '../types';
 
 function selectionMark(question: PublicQuestion, selected: boolean, highlighted: boolean) {
   const boxShape = question.responseType === 'multi_select' ? 'rounded-sm' : 'rounded-full';
@@ -20,6 +20,7 @@ export function GuestQuizPage() {
   const [phase, setPhase] = useState<'loading' | 'error' | 'intro' | 'quiz' | 'result'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
   const [answers, setAnswers] = useState<Record<string, number[]>>({});
+  const [freeTextAnswers, setFreeTextAnswers] = useState<Record<string, string>>({});
   const [startedAt, setStartedAt] = useState('');
   const [result, setResult] = useState<GuestAttemptResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -35,6 +36,7 @@ export function GuestQuizPage() {
   function startQuiz() {
     setStartedAt(new Date().toISOString());
     setAnswers({});
+    setFreeTextAnswers({});
     setSingleIndex(0);
     setPhase('quiz');
   }
@@ -52,13 +54,18 @@ export function GuestQuizPage() {
     });
   }
 
+  function updateFreeText(questionId: string, text: string) {
+    setFreeTextAnswers((prev) => ({ ...prev, [questionId]: text }));
+  }
+
   async function submit() {
     if (!quizData) return;
     setSubmitting(true);
     try {
       const payload = quizData.questions.map((question) => ({
         questionId: question.id,
-        selectedAnswers: answers[question.id] ?? []
+        selectedAnswers: answers[question.id] ?? [],
+        freeText: question.responseType === 'free_text' ? (freeTextAnswers[question.id] ?? '') : undefined
       }));
       const res = await req<GuestAttemptResult>(`/public/api/s/${token}/attempt`, {
         method: 'POST',
@@ -137,7 +144,11 @@ export function GuestQuizPage() {
 
   if (phase === 'quiz' && quizData) {
     const totalQ = quizData.questions.length;
-    const answeredCount = quizData.questions.filter((question) => (answers[question.id] ?? []).length > 0).length;
+    const answeredCount = quizData.questions.filter((question) =>
+      question.responseType === 'free_text'
+        ? (freeTextAnswers[question.id] ?? '').trim().length > 0
+        : (answers[question.id] ?? []).length > 0
+    ).length;
     const questionsToRender = viewMode === 'all' ? quizData.questions : [quizData.questions[singleIndex]];
 
     return (
@@ -203,12 +214,22 @@ export function GuestQuizPage() {
                       <div className="flex-1">
                         <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{question.question}</h3>
                         <span className="inline-block mt-2 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
-                          {question.responseType === 'multi_select' ? 'Multi Select' : 'Single Choice'}
+                          {question.responseType === 'multi_select' ? 'Multi Select' : question.responseType === 'free_text' ? 'Free Text' : 'Single Choice'}
                         </span>
                       </div>
                     </div>
-                    <div className="flex flex-col gap-3 ml-8">
-                      {question.choices.map((choice, choiceIndex) => {
+                    {question.responseType === 'free_text' ? (
+                      <div className="flex flex-col gap-3 ml-8">
+                        <textarea
+                          className="w-full bg-[#0D0D0D] border border-border-subtle rounded px-4 py-3 text-[14px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-accent-teal transition-colors resize-y min-h-[120px]"
+                          placeholder="Type your answer..."
+                          value={freeTextAnswers[question.id] ?? ''}
+                          onChange={(e) => updateFreeText(question.id, e.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3 ml-8">
+                        {question.choices.map((choice, choiceIndex) => {
                         const isSelected = selected.includes(choiceIndex);
                         const cls = `flex items-center gap-4 p-4 rounded border cursor-pointer transition-colors group ${isSelected ? 'quiz-option-selected' : 'border-border-subtle hover:bg-surface-variant'}`;
                         return (
@@ -226,6 +247,7 @@ export function GuestQuizPage() {
                         );
                       })}
                     </div>
+                    )}
                   </div>
                 );
               })}
@@ -283,33 +305,64 @@ export function GuestQuizPage() {
                         <h3 className="text-[18px] font-medium text-on-surface font-geist leading-snug">{question.question}</h3>
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                           <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
-                            {question.responseType === 'multi_select' ? 'Multi Select' : 'Single Choice'}
+                            {question.responseType === 'multi_select' ? 'Multi Select' : question.responseType === 'free_text' ? 'Free Text' : 'Single Choice'}
                           </span>
                           <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">
                             {formatScore(question.questionScore)} point
                           </span>
                         </div>
                       </div>
-                      {skipped && <span className="ml-auto shrink-0 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px]">Skipped</span>}
+                      {!question.userAnswers.length && !question.freeTextAnswer && <span className="ml-auto shrink-0 px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px]">Skipped</span>}
                     </div>
-                    <div className="flex flex-col gap-3 ml-8">
-                      {question.choices.map((choice, choiceIndex) => {
-                        const isCorrect = correctSet.has(choiceIndex);
-                        const isWrong = selectedSet.has(choiceIndex) && !isCorrect;
-                        let cls = 'flex items-center gap-4 p-4 rounded border transition-colors';
-                        if (isCorrect) cls += ' quiz-option-correct';
-                        else if (isWrong) cls += ' quiz-option-wrong';
-                        else cls += ' border-border-subtle opacity-50';
-                        return (
-                          <div key={choiceIndex} className={cls}>
-                            {selectionMark(question, selectedSet.has(choiceIndex), isCorrect)}
-                            <span className={`text-[14px] flex-1 ${isCorrect ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
-                            {isCorrect && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
-                            {isWrong && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
-                          </div>
-                        );
-                      })}
-                    </div>
+                    {question.responseType === 'free_text' ? (
+                      <div className="flex flex-col gap-3 ml-8">
+                        <div className="p-4 bg-[#0D0D0D] border border-border-subtle rounded">
+                          <p className="text-[11px] text-text-muted mb-1 uppercase tracking-wider">Your answer</p>
+                          <p className="text-[14px] text-on-surface whitespace-pre-wrap">{question.freeTextAnswer ?? '(no answer)'}</p>
+                        </div>
+                        {(() => {
+                          const evaluation = result.evaluations?.find((e) => e.questionId === question.id);
+                          if (!evaluation) return null;
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[12px] text-text-muted">Score:</span>
+                                <span className={`text-[14px] font-semibold ${evaluation.score >= 0.7 ? 'text-success' : evaluation.score >= 0.4 ? 'text-yellow-400' : 'text-error'}`}>
+                                  {evaluation.score.toFixed(2)} / 1
+                                </span>
+                              </div>
+                              <div className="p-3 bg-surface-container rounded border border-border-subtle">
+                                <p className="text-[11px] text-text-muted mb-1 uppercase tracking-wider">Evaluation</p>
+                                <p className="text-[13px] text-on-surface whitespace-pre-wrap">{evaluation.explanation}</p>
+                              </div>
+                              <div className="p-3 bg-success/5 rounded border border-success/20">
+                                <p className="text-[11px] text-success mb-1 uppercase tracking-wider">Optimal answer</p>
+                                <p className="text-[13px] text-on-surface whitespace-pre-wrap">{evaluation.optimalAnswer}</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3 ml-8">
+                        {question.choices.map((choice, choiceIndex) => {
+                          const isCorrect = correctSet.has(choiceIndex);
+                          const isWrong = selectedSet.has(choiceIndex) && !isCorrect;
+                          let cls = 'flex items-center gap-4 p-4 rounded border transition-colors';
+                          if (isCorrect) cls += ' quiz-option-correct';
+                          else if (isWrong) cls += ' quiz-option-wrong';
+                          else cls += ' border-border-subtle opacity-50';
+                          return (
+                            <div key={choiceIndex} className={cls}>
+                              {selectionMark(question, selectedSet.has(choiceIndex), isCorrect)}
+                              <span className={`text-[14px] flex-1 ${isCorrect ? 'text-on-surface font-medium' : 'text-on-surface-variant'}`}>{choice}</span>
+                              {isCorrect && <Icon name="check_circle" size={18} className="text-success shrink-0" fill />}
+                              {isWrong && <Icon name="cancel" size={18} className="text-error shrink-0" fill />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                     {question.explanation && (
                       <div className="mt-4 ml-8 p-3 bg-surface-container rounded border border-border-subtle">
                         <p className="text-[13px] text-text-muted"><span className="text-secondary font-medium mr-1">Explanation:</span>{question.explanation}</p>

@@ -1,13 +1,14 @@
 export type Difficulty = number;
-export type QuestionType = 'multiple_choice' | 'true_false' | 'mixed' | 'multi_select';
-export type ResponseType = 'single_choice' | 'multi_select';
+export const QUESTION_TYPES = ['multiple_choice', 'true_false', 'multi_select', 'free_text'] as const;
+export type QuestionType = typeof QUESTION_TYPES[number];
+export type ResponseType = 'single_choice' | 'multi_select' | 'free_text';
 
 export interface QuizSettings {
   numQuestions: number;
   choicesPerQuestion: number;
   difficulty: Difficulty;
   language: string;
-  questionType: QuestionType;
+  questionType: QuestionType[];
 }
 
 export interface QuizQuestion {
@@ -22,6 +23,14 @@ export interface QuizQuestion {
 export interface AttemptAnswer {
   questionId: string;
   selectedAnswers: number[];
+  freeText?: string;
+}
+
+export interface FreeTextEvaluation {
+  questionId: string;
+  score: number;
+  explanation: string;
+  optimalAnswer: string;
 }
 
 export interface Quiz {

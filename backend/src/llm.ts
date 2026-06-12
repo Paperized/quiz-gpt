@@ -5,7 +5,9 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { logger, summarizeText } from './logger.js';
-import type { QuizQuestion, QuizSettings } from './types.js';
+import type { QuizQuestion, QuizSettings, FreeTextEvaluation } from './types.js';
+import { QUESTION_TYPES } from './types.js';
+import type { QuestionType, ResponseType } from './types.js';
 import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
 import { getEffectiveSettings } from './settings.js';
@@ -16,9 +18,9 @@ const outputSchema = z.object({
   title: z.string().min(3),
   questions: z.array(z.object({
     question: z.string().min(5),
-    responseType: z.enum(['single_choice', 'multi_select']),
-    choices: z.array(z.string().min(1)).min(2),
-    correctAnswers: z.array(z.number().int().nonnegative()).min(1),
+    responseType: z.enum(['single_choice', 'multi_select', 'free_text']),
+    choices: z.array(z.string().min(1)),
+    correctAnswers: z.array(z.number().int().nonnegative()),
     explanation: z.string().optional()
   })).min(1)
 });
@@ -47,6 +49,8 @@ export function shuffleArray<T>(items: T[]): T[] {
 }
 
 export function shuffleQuestionChoices(question: QuizQuestion): QuizQuestion {
+  if (question.responseType === 'free_text') return question;
+
   const indexedChoices = question.choices.map((choice, index) => ({ choice, index }));
   const shuffledChoices = shuffleArray(indexedChoices);
   const correctSet = new Set(question.correctAnswers);
@@ -140,7 +144,25 @@ export function sanitizeQuestions(
     throw new Error('LLM returned too few questions for requested constraints');
   }
 
+  const allowedTypes = new Set(settings.questionType);
+
   return limitedQuestions.map((q) => {
+    const mappedTypes = responseTypeToQuestionTypes(q.responseType);
+    if (!mappedTypes.some((t) => allowedTypes.has(t))) {
+      throw new Error(`LLM returned responseType "${q.responseType}" not compatible with requested types [${settings.questionType.join(', ')}]`);
+    }
+
+    if (q.responseType === 'free_text') {
+      return {
+        id: randomUUID(),
+        question: q.question,
+        responseType: 'free_text' as const,
+        choices: [],
+        correctAnswers: [],
+        explanation: q.explanation
+      };
+    }
+
     const uniqueCorrectAnswers = Array.from(new Set(q.correctAnswers));
     if (uniqueCorrectAnswers.length !== q.correctAnswers.length) {
       throw new Error('LLM returned duplicate correctAnswers indices');
@@ -152,22 +174,14 @@ export function sanitizeQuestions(
     const lowerChoices = q.choices.map((choice) => choice.toLowerCase());
     const trueFalseChoices = lowerChoices.includes('true') && lowerChoices.includes('false');
 
-    if (settings.questionType === 'true_false') {
-      if (q.responseType !== 'single_choice' || q.choices.length !== 2 || !trueFalseChoices || uniqueCorrectAnswers.length !== 1) {
-        throw new Error('LLM returned invalid true_false question');
+    if (q.responseType === 'single_choice') {
+      if (q.choices.length < 2 || uniqueCorrectAnswers.length !== 1) {
+        throw new Error('LLM returned invalid single_choice question');
       }
-    } else if (settings.questionType === 'multiple_choice') {
-      if (q.responseType !== 'single_choice' || uniqueCorrectAnswers.length !== 1) {
-        throw new Error('LLM returned invalid multiple_choice question');
-      }
-    } else if (settings.questionType === 'multi_select') {
-      if (q.responseType !== 'multi_select' || q.choices.length < 4 || uniqueCorrectAnswers.length < 2 || uniqueCorrectAnswers.length >= q.choices.length) {
+    } else if (q.responseType === 'multi_select') {
+      if (q.choices.length < 4 || uniqueCorrectAnswers.length < 2 || uniqueCorrectAnswers.length >= q.choices.length) {
         throw new Error('LLM returned invalid multi_select question');
       }
-    } else if (q.responseType === 'single_choice' && uniqueCorrectAnswers.length !== 1) {
-      throw new Error('LLM returned invalid single_choice question in mixed mode');
-    } else if (q.responseType === 'multi_select' && (q.choices.length < 4 || uniqueCorrectAnswers.length < 2 || uniqueCorrectAnswers.length >= q.choices.length)) {
-      throw new Error('LLM returned invalid multi_select question in mixed mode');
     }
 
     return shuffleQuestionChoices({
@@ -179,6 +193,28 @@ export function sanitizeQuestions(
       explanation: q.explanation
     });
   });
+}
+
+const QUESTION_TYPE_INSTRUCTIONS: Record<QuestionType, string> = {
+  multiple_choice: 'responseType "single_choice", at least 2 plausible distractors, exactly 1 correct answer',
+  true_false: 'responseType "single_choice", exactly 2 choices ["True", "False"], exactly 1 correct answer',
+  multi_select: 'responseType "multi_select", at least 4 choices, at least 2 correct answers, not all choices can be correct',
+  free_text: 'responseType "free_text", no choices, no correctAnswers, open-ended question answerable with a paragraph'
+};
+
+function buildQuestionTypeInstructions(types: QuestionType[]): string {
+  if (types.length === 1) {
+    const inst = QUESTION_TYPE_INSTRUCTIONS[types[0]];
+    return `Every question must use ${inst}.`;
+  }
+  const list = types.map((t) => `- ${QUESTION_TYPE_INSTRUCTIONS[t]}`).join('\n');
+  return `Include a balanced mix of the following question types:\n${list}`;
+}
+
+function responseTypeToQuestionTypes(rt: ResponseType): QuestionType[] {
+  if (rt === 'single_choice') return ['multiple_choice', 'true_false'];
+  if (rt === 'multi_select') return ['multi_select'];
+  return ['free_text'];
 }
 
 export async function generateQuizFromLLM(
@@ -197,7 +233,7 @@ export async function generateQuizFromLLM(
     `choicesPerQuestion=${settings.choicesPerQuestion}`,
     `difficulty=${settings.difficulty}/10 (${getDifficultyBand(settings.difficulty).label})`,
     `language=${settings.language}`,
-    `questionType=${settings.questionType}`
+    `questionTypes=[${settings.questionType.join(', ')}]`
   ].join('; ');
   const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
@@ -252,16 +288,11 @@ export async function generateQuizFromLLM(
     existingQuestionsText,
     regenerationPromptText,
     'Output schema:',
-    '{"title": string, "questions": [{"question": string, "responseType": "single_choice" | "multi_select", "choices": string[], "correctAnswers": number[], "explanation"?: string}]}',
+    '{"title": string, "questions": [{"question": string, "responseType": "single_choice" | "multi_select" | "free_text", "choices": string[], "correctAnswers": number[], "explanation"?: string}]}',
     'For single_choice questions, correctAnswers must contain exactly one index.',
     'For multi_select questions, correctAnswers must contain at least two indices and not cover every choice.',
-    'For true_false mode, responseType must be "single_choice" and choices must be exactly ["True", "False"] or ["False", "True"].',
-    settings.questionType === 'multi_select'
-      ? 'Every question must use responseType "multi_select", have at least 4 choices, and contain plausible distractors.'
-      : null,
-    settings.questionType === 'mixed'
-      ? 'Return a real mix of question styles. If choicesPerQuestion is at least 4, include at least one multi_select question when possible.'
-      : null,
+    'For free_text questions, set choices to [] and correctAnswers to [].',
+    buildQuestionTypeInstructions(settings.questionType),
     retrievedContext
       ? `Source material (retrieved excerpts):\n${retrievedContext}`
       : 'No source material provided. Use your general knowledge for the requested topic.'
@@ -308,7 +339,7 @@ export async function proposeGroupQuizFromLLM(
     `choicesPerQuestion=${settings.choicesPerQuestion}`,
     `difficulty=${settings.difficulty}/10 (${getDifficultyBand(settings.difficulty).label})`,
     `language=${settings.language}`,
-    `questionType=${settings.questionType}`
+    `questionTypes=[${settings.questionType.join(', ')}]`
   ].join('; ');
   const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
@@ -362,5 +393,92 @@ export async function proposeGroupQuizFromLLM(
       model: cfg.LLM_MODEL
     });
     throw new Error(`LLM group proposal failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+  }
+}
+
+export async function evaluateFreeTextAnswers(
+  questions: QuizQuestion[],
+  answers: { questionId: string; text: string }[],
+  quizContext: { title: string; topic: string }
+): Promise<FreeTextEvaluation[]> {
+  const cfg = await getEffectiveSettings();
+  const model = getModel(cfg);
+
+  const questionIds = questions.map((q) => q.id);
+
+  const questionsText = questions.map((q, i) => {
+    const answer = answers.find((a) => a.questionId === q.id);
+    return `Question ${i + 1} (id: ${q.id}): ${q.question}\nUser's answer: ${answer?.text ?? '(no answer)'}`;
+  }).join('\n\n');
+
+  const system = [
+    'You are an expert evaluator. Assess free-text answers against the questions and quiz context.',
+    'For each answer, provide a score from 0 to 1, a detailed explanation, and the optimal answer.',
+    'Score 0 = completely wrong or empty, 1 = perfect. Use partial scores where appropriate.',
+    'The explanation must evaluate the answer step by step: what is correct, what is missing or wrong, and why.',
+    'The optimalAnswer is what an ideal complete answer would look like.',
+    'Return ONLY valid JSON. The response must be a single JSON object with an "evaluations" array.',
+    'Each evaluation object must have: "questionId" (the exact same id from the question), "score" (number 0-1), "explanation" (string), "optimalAnswer" (string).',
+    'Example: {"evaluations": [{"questionId": "abc-123", "score": 0.8, "explanation": "Good answer but...", "optimalAnswer": "The ideal answer is..."}]}'
+  ].join(' ');
+
+  const prompt = [
+    `Quiz: ${quizContext.title}`,
+    `Topic: ${quizContext.topic}`,
+    '',
+    'Evaluate the following free-text answers and return the exact JSON structure:',
+    '{"evaluations": [{"questionId": "...", "score": 0.5, "explanation": "...", "optimalAnswer": "..."}]}',
+    '',
+    questionsText
+  ].join('\n');
+
+  logger.info('llm.free_text_evaluation.requested', {
+    questionCount: questions.length,
+    providerStyle: cfg.LLM_API_STYLE,
+    model: cfg.LLM_MODEL
+  });
+
+  try {
+    const started = Date.now();
+    const { text } = await generateText({
+      model,
+      maxOutputTokens: cfg.LLM_MAX_TOKENS,
+      system,
+      prompt
+    });
+
+    const raw = JSON.parse(extractJsonPayload(text));
+
+    let rawEvaluations: unknown[];
+
+    if (Array.isArray(raw)) {
+      rawEvaluations = raw;
+    } else if (raw && typeof raw === 'object' && 'evaluations' in raw && Array.isArray((raw as Record<string, unknown>).evaluations)) {
+      rawEvaluations = (raw as Record<string, unknown>).evaluations as unknown[];
+    } else {
+      throw new Error('LLM did not return evaluations as an array');
+    }
+
+    const evaluations: FreeTextEvaluation[] = rawEvaluations.map((e: unknown, i: number) => {
+      const item = e as Record<string, unknown>;
+      return {
+        questionId: typeof item.questionId === 'string' ? item.questionId : questionIds[i],
+        score: typeof item.score === 'number' ? Math.max(0, Math.min(1, item.score)) : 0,
+        explanation: typeof item.explanation === 'string' ? item.explanation : 'No explanation provided',
+        optimalAnswer: typeof item.optimalAnswer === 'string' ? item.optimalAnswer : 'No optimal answer provided'
+      };
+    });
+
+    logger.info('llm.free_text_evaluation.completed', {
+      evaluations: evaluations.length,
+      durationMs: Date.now() - started
+    });
+    return evaluations;
+  } catch (error) {
+    logger.error('llm.free_text_evaluation.failed', error, {
+      providerStyle: cfg.LLM_API_STYLE,
+      model: cfg.LLM_MODEL
+    });
+    throw new Error(`Free-text evaluation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
