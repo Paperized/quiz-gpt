@@ -5,7 +5,7 @@ import type { QuizSettings } from './types';
 export const defaultSettings: QuizSettings = {
   numQuestions: 10,
   choicesPerQuestion: 4,
-  difficulty: 'Medium',
+  difficulty: 5,
   language: 'English',
   questionType: 'mixed',
 };

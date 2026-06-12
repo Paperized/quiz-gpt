@@ -1,0 +1,6 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: quiz-gpt:dev

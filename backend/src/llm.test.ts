@@ -12,7 +12,7 @@ beforeAll(async () => {
 const multiSelectSettings: QuizSettings = {
   numQuestions: 1,
   choicesPerQuestion: 4,
-  difficulty: 'Medium',
+  difficulty: 5,
   language: 'English',
   questionType: 'multi_select'
 };

@@ -6,6 +6,7 @@ import { RegenerateDialog } from '../components/RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
 import { formatScore, shuffleArray } from '../helpers';
+import { formatDifficultyLabel } from '../difficulty';
 import type { Quiz, QuizQuestion } from '../types';
 
 type DisplayQuestion = QuizQuestion & { choiceOrder: number[] };
@@ -261,7 +262,7 @@ export function QuizPage() {
           <div className="mb-8 border-b border-border-subtle pb-6 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
             <div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.difficulty}</span>
+                <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{formatDifficultyLabel(quiz.settings.difficulty)}</span>
                 <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.questionType.replace('_', ' ')}</span>
                 {quiz.contextUsed && <span className="px-2 py-0.5 rounded-full bg-secondary/20 text-secondary text-[10px] uppercase tracking-wider">Source Context</span>}
               </div>

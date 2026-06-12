@@ -23,7 +23,7 @@ const quiz: Quiz = {
   settings: {
     numQuestions: 1,
     choicesPerQuestion: 4,
-    difficulty: 'Medium',
+    difficulty: 5,
     language: 'English',
     questionType: 'multiple_choice'
   },
@@ -65,6 +65,8 @@ describe('QuizPage draft persistence', () => {
   it('persists the current answers and restores them on revisit', () => {
     const key = 'quiz_draft:quiz-1';
     const { unmount } = renderQuizPage();
+
+    expect(screen.getByText('Difficulty 5/10 · Intermediate')).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('4'));
 

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { req } from '../api';
 import { scoreColor, formatScore, formatSeconds } from '../helpers';
+import { formatDifficultyLabel } from '../difficulty';
 import type { AttemptReview } from '../types';
 
 // ─── Review Page (/review/:attemptId) ────────────────────────────────────────
@@ -63,7 +64,7 @@ export function ReviewPage() {
           {/* Quiz header */}
           <div className="mb-8 border-b border-border-subtle pb-6">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.difficulty}</span>
+              <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{formatDifficultyLabel(quiz.settings.difficulty)}</span>
               <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{quiz.settings.questionType.replace('_', ' ')}</span>
               <span className="px-2 py-0.5 rounded-full bg-surface-bright text-text-muted text-[10px] uppercase tracking-wider">{formatSeconds(attempt.timeTakenSeconds)}</span>
             </div>

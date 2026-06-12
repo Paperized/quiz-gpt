@@ -21,7 +21,7 @@ const quizzes: Quiz[] = [{
   settings: {
     numQuestions: 1,
     choicesPerQuestion: 4,
-    difficulty: 'Medium',
+    difficulty: 5,
     language: 'English',
     questionType: 'multiple_choice'
   },

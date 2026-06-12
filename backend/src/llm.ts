@@ -10,6 +10,7 @@ import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
 import { getEffectiveSettings } from './settings.js';
 import type { EffectiveSettings } from './settings.js';
+import { buildDifficultyPromptGuidance, getDifficultyBand } from './difficulty.js';
 
 const outputSchema = z.object({
   title: z.string().min(3),
@@ -194,10 +195,11 @@ export async function generateQuizFromLLM(
   const settingsSummary = [
     `numQuestions=${settings.numQuestions}`,
     `choicesPerQuestion=${settings.choicesPerQuestion}`,
-    `difficulty=${settings.difficulty}`,
+    `difficulty=${settings.difficulty}/10 (${getDifficultyBand(settings.difficulty).label})`,
     `language=${settings.language}`,
     `questionType=${settings.questionType}`
   ].join('; ');
+  const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
   progress?.onProgress?.('Retrieving context');
   const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, cfg);
@@ -246,6 +248,7 @@ export async function generateQuizFromLLM(
   const prompt = [
     `Topic: ${topic}`,
     `Constraints: ${settingsSummary}`,
+    difficultyGuidance,
     existingQuestionsText,
     regenerationPromptText,
     'Output schema:',
@@ -303,10 +306,11 @@ export async function proposeGroupQuizFromLLM(
   const settingsSummary = [
     `numQuestions=${settings.numQuestions}`,
     `choicesPerQuestion=${settings.choicesPerQuestion}`,
-    `difficulty=${settings.difficulty}`,
+    `difficulty=${settings.difficulty}/10 (${getDifficultyBand(settings.difficulty).label})`,
     `language=${settings.language}`,
     `questionType=${settings.questionType}`
   ].join('; ');
+  const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
   progress?.onProgress?.('Retrieving context');
   const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, cfg);
@@ -326,6 +330,7 @@ export async function proposeGroupQuizFromLLM(
   const prompt = [
     `Topic: ${topic}`,
     `Shared quiz constraints: ${settingsSummary}`,
+    difficultyGuidance,
     `Return between ${minQuizCount} and ${maxQuizCount} quiz items.`,
     'Prefer a smaller number when the material supports only a few substantial quizzes.',
     'Output schema:',

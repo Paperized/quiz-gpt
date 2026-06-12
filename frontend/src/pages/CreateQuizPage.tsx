@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
+import { DifficultyControl } from '../components/DifficultyControl';
 import { GenerationProgressDialog, GenerationStatusPanel, useGenerationJob } from '../components/RegenerateDialog';
 import { useQuizzes } from '../context';
 import { req } from '../api';
@@ -173,19 +174,11 @@ export function CreateQuizPage() {
                 <div className="flex justify-between text-[12px] text-text-muted opacity-50"><span>1</span><span>40</span></div>
               </div>
 
-              {/* Difficulty */}
-              <div className="space-y-2">
-                <label className="text-[12px] font-medium text-on-surface block font-geist">Difficulty Level</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['Easy', 'Medium', 'Hard'] as const).map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setSettings({ ...settings, difficulty: d })}
-                      className={`text-center py-2 border rounded text-[12px] font-medium transition-colors ${settings.difficulty === d ? 'border-secondary text-secondary bg-secondary/10' : 'border-border-subtle text-text-muted hover:border-outline-variant'}`}
-                    >{d}</button>
-                  ))}
-                </div>
-              </div>
+              <DifficultyControl
+                id="create-difficulty"
+                value={settings.difficulty}
+                onChange={(difficulty) => setSettings({ ...settings, difficulty })}
+              />
 
               {/* Question type */}
               <div className="space-y-2">

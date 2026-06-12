@@ -3,7 +3,7 @@
 export type QuizSettings = {
   numQuestions: number;
   choicesPerQuestion: number;
-  difficulty: 'Easy' | 'Medium' | 'Hard';
+  difficulty: number;
   language: string;
   questionType: 'multiple_choice' | 'true_false' | 'mixed' | 'multi_select';
 };

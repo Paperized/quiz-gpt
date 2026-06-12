@@ -1,4 +1,4 @@
-export type Difficulty = 'Easy' | 'Medium' | 'Hard';
+export type Difficulty = number;
 export type QuestionType = 'multiple_choice' | 'true_false' | 'mixed' | 'multi_select';
 export type ResponseType = 'single_choice' | 'multi_select';
 

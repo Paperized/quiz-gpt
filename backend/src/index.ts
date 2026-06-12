@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { difficultySchema } from './difficulty.js';
 import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
@@ -109,7 +110,7 @@ app.use('/api', apiLimiter);
 const quizSettingsSchema = z.object({
   numQuestions: z.number().int().min(1).max(100),
   choicesPerQuestion: z.number().int().min(2).max(6),
-  difficulty: z.enum(['Easy', 'Medium', 'Hard']),
+  difficulty: difficultySchema,
   language: z.string().trim().min(2),
   questionType: z.enum(['multiple_choice', 'true_false', 'mixed', 'multi_select'])
 }).superRefine((settings, ctx) => {

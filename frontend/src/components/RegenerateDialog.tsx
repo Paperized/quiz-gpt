@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
+import { DifficultyControl } from './DifficultyControl';
 import { req } from '../api';
 import type {
   GenerationJob,
@@ -9,14 +10,7 @@ import type {
   QuizGroup,
   QuizSettings
 } from '../types';
-
-const defaultSettings: QuizSettings = {
-  numQuestions: 10,
-  choicesPerQuestion: 4,
-  difficulty: 'Medium',
-  language: 'English',
-  questionType: 'mixed',
-};
+import { defaultSettings } from '../helpers';
 
 export function useGenerationJob<T>(jobId: string | null) {
   const [job, setJob] = useState<GenerationJob<T> | null>(null);
@@ -358,18 +352,11 @@ export function RegenerateDialog({ quiz, group, quizzes, onClose, onComplete }: 
               onChange={(e) => setSettings({ ...settings, numQuestions: +e.target.value })}
             />
 
-            <div className="space-y-2">
-              <label className="text-[12px] font-medium text-on-surface block font-geist">Difficulty Level</label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['Easy', 'Medium', 'Hard'] as const).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setSettings({ ...settings, difficulty: d })}
-                    className={`text-center py-2 border rounded text-[12px] font-medium transition-colors ${settings.difficulty === d ? 'border-secondary text-secondary bg-secondary/10' : 'border-border-subtle text-text-muted hover:border-outline-variant'}`}
-                  >{d}</button>
-                ))}
-              </div>
-            </div>
+            <DifficultyControl
+              id="regenerate-difficulty"
+              value={settings.difficulty}
+              onChange={(difficulty) => setSettings({ ...settings, difficulty })}
+            />
 
             <div className="space-y-2">
               <label className="text-[12px] font-medium text-on-surface block font-geist">Question Type</label>
