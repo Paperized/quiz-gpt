@@ -150,8 +150,8 @@ const settingsSaveSchema = z.object({
   EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(4).max(256).optional(),
   MAX_RETRIEVED_CHUNKS: z.coerce.number().int().min(4).max(40).optional(),
   MAX_RETRIEVED_CHARS: z.coerce.number().int().min(4000).max(120000).optional(),
-  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional(),
-  GENERATE_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional()
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(0).optional(),
+  GENERATE_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(0).optional()
 });
 
 export type SettingsSaveInput = z.infer<typeof settingsSaveSchema>;

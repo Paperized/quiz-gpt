@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "vitest run --config ./vitest.config.ts",
     "lint": "echo 'No linter configured for frontend'"
   },
   "dependencies": {

@@ -194,9 +194,9 @@ export function SettingsPage() {
     const mch = Number(form.maxChars);
     if (!form.maxChars || isNaN(mch) || mch < 4000 || mch > 120000 || !Number.isInteger(mch)) e.maxChars = 'Range: 4000–120000';
     const rl = Number(form.rateLimitMax);
-    if (!form.rateLimitMax || isNaN(rl) || rl < 1 || !Number.isInteger(rl)) e.rateLimitMax = 'Must be a positive integer';
+    if (form.rateLimitMax === '' || isNaN(rl) || rl < 0 || !Number.isInteger(rl)) e.rateLimitMax = 'Must be 0 or a positive integer';
     const grl = Number(form.generateRateLimitMax);
-    if (!form.generateRateLimitMax || isNaN(grl) || grl < 1 || !Number.isInteger(grl)) e.generateRateLimitMax = 'Must be a positive integer';
+    if (form.generateRateLimitMax === '' || isNaN(grl) || grl < 0 || !Number.isInteger(grl)) e.generateRateLimitMax = 'Must be 0 or a positive integer';
     return e;
   }
 
@@ -435,11 +435,11 @@ export function SettingsPage() {
                 <h3 className={sectionTitle}>Rate Limiting</h3>
                 <div className={card}>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <SettingsField label="Max Requests / window *" error={errs.rateLimitMax} hint="General API limit per window">
-                      <SettingsInput type="number" min={1} value={form.rateLimitMax} onChange={set('rateLimitMax')} />
+                    <SettingsField label="Max Requests / window *" error={errs.rateLimitMax} hint="General API limit per window. Use 0 to disable.">
+                      <SettingsInput type="number" min={0} value={form.rateLimitMax} onChange={set('rateLimitMax')} />
                     </SettingsField>
-                    <SettingsField label="Generate Max Requests / window *" error={errs.generateRateLimitMax} hint="Limit for quiz generation endpoint (expensive)">
-                      <SettingsInput type="number" min={1} value={form.generateRateLimitMax} onChange={set('generateRateLimitMax')} />
+                    <SettingsField label="Generate Max Requests / window *" error={errs.generateRateLimitMax} hint="Limit for quiz generation endpoint (expensive). Use 0 to disable.">
+                      <SettingsInput type="number" min={0} value={form.generateRateLimitMax} onChange={set('generateRateLimitMax')} />
                     </SettingsField>
                   </div>
                 </div>

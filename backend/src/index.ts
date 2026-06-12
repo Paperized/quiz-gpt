@@ -47,19 +47,23 @@ const upload = multer({
   }
 });
 
-const apiLimiter = rateLimit({
-  windowMs: config.RATE_LIMIT_WINDOW_MS,
-  limit: config.RATE_LIMIT_MAX_REQUESTS,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false
-});
+const apiLimiter = config.RATE_LIMIT_MAX_REQUESTS > 0
+  ? rateLimit({
+      windowMs: config.RATE_LIMIT_WINDOW_MS,
+      limit: config.RATE_LIMIT_MAX_REQUESTS,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false
+    })
+  : (_req: Request, _res: Response, next: NextFunction) => next();
 
-const generateLimiter = rateLimit({
-  windowMs: config.RATE_LIMIT_WINDOW_MS,
-  limit: config.GENERATE_RATE_LIMIT_MAX_REQUESTS,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false
-});
+const generateLimiter = config.GENERATE_RATE_LIMIT_MAX_REQUESTS > 0
+  ? rateLimit({
+      windowMs: config.RATE_LIMIT_WINDOW_MS,
+      limit: config.GENERATE_RATE_LIMIT_MAX_REQUESTS,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false
+    })
+  : (_req: Request, _res: Response, next: NextFunction) => next();
 
 function hasBasicAuth(): boolean {
   return Boolean(config.BASIC_AUTH_USERNAME && config.BASIC_AUTH_PASSWORD);
@@ -124,7 +128,7 @@ const quizSettingsSchema = z.object({
 });
 
 const generateQuizSchema = z.object({
-  topic: z.string().trim().min(3).max(2000),
+  topic: z.string().trim().min(3),
   settings: quizSettingsSchema,
   sourceText: z.string().trim().max(250_000).optional(),
   githubRepoUrl: z.string().trim().url().optional().refine(

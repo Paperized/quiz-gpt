@@ -263,6 +263,7 @@ export function RegenerateDialog({ quiz, group, quizzes, onClose, onComplete }: 
       if (completionHandledRef.current) return;
       completionHandledRef.current = true;
       setLoading(false);
+      onClose();
       onComplete(job.resultPayload ?? undefined);
     } else if (job.status === 'failed') {
       setLoading(false);

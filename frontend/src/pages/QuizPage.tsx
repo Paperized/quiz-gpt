@@ -10,6 +10,33 @@ import type { Quiz, QuizQuestion } from '../types';
 
 type DisplayQuestion = QuizQuestion & { choiceOrder: number[] };
 type DisplayQuiz = Omit<Quiz, 'questions'> & { questions: DisplayQuestion[] };
+type QuizDraft = {
+  answers: Record<string, number[]>;
+  startedAt: string;
+  singleIndex: number;
+};
+
+function getQuizDraftStorageKey(quizId: string) {
+  return `quiz_draft:${quizId}`;
+}
+
+function readQuizDraft(quizId: string): QuizDraft | null {
+  try {
+    const raw = localStorage.getItem(getQuizDraftStorageKey(quizId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as QuizDraft;
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.startedAt !== 'string' || typeof parsed.singleIndex !== 'number' || typeof parsed.answers !== 'object') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearQuizDraft(quizId: string) {
+  localStorage.removeItem(getQuizDraftStorageKey(quizId));
+}
 
 function toDisplayQuestion(question: QuizQuestion): DisplayQuestion {
   return {
@@ -51,7 +78,7 @@ export function QuizPage() {
   const [answers, setAnswers] = useState<Record<string, number[]>>({});
   const [submitted, setSubmitted] = useState(false);
   const [submittedScore, setSubmittedScore] = useState<number | null>(null);
-  const [startedAt] = useState(() => new Date().toISOString());
+  const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'one'>(() => (localStorage.getItem('viewMode') as 'all' | 'one') ?? 'all');
   const [singleIndex, setSingleIndex] = useState(0);
@@ -61,10 +88,28 @@ export function QuizPage() {
 
   useEffect(() => { setLocalQuizzes(quizzes.map(toDisplayQuiz)); }, [quizzes]);
   useEffect(() => { localStorage.setItem('viewMode', viewMode); }, [viewMode]);
-  useEffect(() => { setAnswers({}); setSubmitted(false); setSubmittedScore(null); setError(null); setSingleIndex(0); }, [id]);
+  useEffect(() => {
+    if (!id) return;
+    const draft = readQuizDraft(id);
+    setAnswers(draft?.answers ?? {});
+    setStartedAt(draft?.startedAt ?? new Date().toISOString());
+    setSingleIndex(draft?.singleIndex ?? 0);
+    setSubmitted(false);
+    setSubmittedScore(null);
+    setError(null);
+  }, [id]);
   useEffect(() => {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [id]);
+  useEffect(() => {
+    if (!id || submitted) return;
+    const draft: QuizDraft = {
+      answers,
+      startedAt,
+      singleIndex
+    };
+    localStorage.setItem(getQuizDraftStorageKey(id), JSON.stringify(draft));
+  }, [answers, id, singleIndex, startedAt, submitted]);
 
   const quiz = useMemo(() => localQuizzes.find((q) => q.id === id) ?? null, [localQuizzes, id]);
 
@@ -104,6 +149,7 @@ export function QuizPage() {
     setAnswers({});
     setSubmitted(false);
     setSubmittedScore(null);
+    setStartedAt(new Date().toISOString());
   }
 
   function updateAnswer(question: DisplayQuestion, choiceIndex: number) {
@@ -139,6 +185,7 @@ export function QuizPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quizId: quiz.id, answers: payload, startedAt, completedAt: new Date().toISOString() }),
       });
+      clearQuizDraft(quiz.id);
       setSubmittedScore(result.score);
       setSubmitted(true);
     } catch (e) {
@@ -150,6 +197,7 @@ export function QuizPage() {
     setAnswers({});
     setSubmitted(false);
     setSubmittedScore(null);
+    setStartedAt(new Date().toISOString());
     setSingleIndex(0);
   }
 
@@ -162,10 +210,12 @@ export function QuizPage() {
           onClose={() => setShowRegenerate(false)}
           onComplete={(result) => {
             setShowRegenerate(false);
-            void reload();
-            if (result && 'id' in result) {
-              navigate(`/quiz/${result.id}`);
-            }
+            void (async () => {
+              await reload();
+              if (result && 'id' in result) {
+                navigate(`/quiz/${result.id}`);
+              }
+            })();
           }}
         />
       )}

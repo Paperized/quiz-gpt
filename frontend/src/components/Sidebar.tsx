@@ -337,23 +337,25 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           onClose={() => setRegenerateTarget(null)}
           onComplete={(result) => {
             setRegenerateTarget(null);
-            void reload();
-            void reloadGroups();
-            if (result && 'quizzes' in result && Array.isArray(result.quizzes)) {
-              const groupResult = result as GroupQuizGenerationResult;
-              setSidebarCollapsedState({
-                ...getSidebarCollapsedState(),
-                __groups__: false,
-                [groupResult.groupId]: false
-              });
-              if (groupResult.quizzes[0]) {
-                navigate(`/quiz/${groupResult.quizzes[0].id}`);
+            void (async () => {
+              await reload();
+              await reloadGroups();
+              if (result && 'quizzes' in result && Array.isArray(result.quizzes)) {
+                const groupResult = result as GroupQuizGenerationResult;
+                setSidebarCollapsedState({
+                  ...getSidebarCollapsedState(),
+                  __groups__: false,
+                  [groupResult.groupId]: false
+                });
+                if (groupResult.quizzes[0]) {
+                  navigate(`/quiz/${groupResult.quizzes[0].id}`);
+                }
+                return;
               }
-              return;
-            }
-            if (result && 'id' in result) {
-              navigate(`/quiz/${result.id}`);
-            }
+              if (result && 'id' in result) {
+                navigate(`/quiz/${result.id}`);
+              }
+            })();
           }}
         />
       )}

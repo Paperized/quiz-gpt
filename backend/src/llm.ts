@@ -36,7 +36,30 @@ type LlmProgressCallbacks = {
   onProgress?: (step: LlmProgressStep) => void;
 };
 
-function extractJsonPayload(text: string): string {
+export function shuffleArray<T>(items: T[]): T[] {
+  const next = [...items];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
+export function shuffleQuestionChoices(question: QuizQuestion): QuizQuestion {
+  const indexedChoices = question.choices.map((choice, index) => ({ choice, index }));
+  const shuffledChoices = shuffleArray(indexedChoices);
+  const correctSet = new Set(question.correctAnswers);
+
+  return {
+    ...question,
+    choices: shuffledChoices.map((entry) => entry.choice),
+    correctAnswers: shuffledChoices
+      .map((entry, index) => (correctSet.has(entry.index) ? index : -1))
+      .filter((index) => index >= 0)
+  };
+}
+
+export function extractJsonPayload(text: string): string {
   const trimmed = text.trim();
   const fencedMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return fencedMatch ? fencedMatch[1].trim() : trimmed;
@@ -107,7 +130,7 @@ function getModel(cfg: EffectiveSettings) {
   return openai(cfg.LLM_MODEL);
 }
 
-function sanitizeQuestions(
+export function sanitizeQuestions(
   parsed: z.infer<typeof outputSchema>,
   settings: QuizSettings
 ): QuizQuestion[] {
@@ -146,14 +169,14 @@ function sanitizeQuestions(
       throw new Error('LLM returned invalid multi_select question in mixed mode');
     }
 
-    return {
+    return shuffleQuestionChoices({
       id: randomUUID(),
       question: q.question,
       responseType: q.responseType,
       choices: q.choices,
       correctAnswers: uniqueCorrectAnswers,
       explanation: q.explanation
-    };
+    });
   });
 }
 
