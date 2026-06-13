@@ -13,12 +13,14 @@ import { config } from './config.js';
 import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
 import { generateQuizFromLLM, proposeGroupQuizFromLLM, evaluateFreeTextAnswers } from './llm.js';
+import { resolveLLMConfig, resolveEmbeddingConfig, getDefaultLLMConfig, getDefaultEmbeddingConfig } from './model-config.js';
 import { normalizeAttemptAnswers, scoreAttempt } from './scoring.js';
 import { authRequired, requireAdmin, isAdminUser } from './auth.js';
 import { authRoutes } from './routes-auth.js';
 import { userRoutes } from './routes-users.js';
 import { modelRoutes } from './routes-models.js';
-import type { AttemptAnswer, FreeTextEvaluation, QuizQuestion, QuizSettings } from './types.js';
+import { providerRoutes } from './routes-providers.js';
+import type { AttemptAnswer, FreeTextEvaluation, QuizQuestion, QuizSettings, LLMConfig, EmbeddingConfig } from './types.js';
 import { QUESTION_TYPES } from './types.js';
 
 const app = express();
@@ -76,6 +78,7 @@ const generateLimiter = config.GENERATE_RATE_LIMIT_MAX_REQUESTS > 0
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/models', modelRoutes);
+app.use('/api/providers', providerRoutes);
 
 // ─── Rate limiting ──────────────────────────────────────────────────────────────
 
@@ -109,7 +112,9 @@ const generateQuizSchema = z.object({
   githubRepoUrl: z.string().trim().url().optional().refine(
     (url) => !url || /^https:\/\/github\.com\//i.test(url),
     { message: 'Only github.com URLs are allowed' }
-  )
+  ),
+  llmModelId: z.string().uuid().optional(),
+  embeddingModelId: z.string().uuid().nullable().optional()
 });
 
 const groupProposalRequestSchema = generateQuizSchema.extend({
@@ -319,7 +324,9 @@ function parseSourceGenerationRequest(req: Request): ParsedSourceRequest | { err
     topic: req.body.topic,
     settings: settingsValue,
     sourceText: typeof req.body.sourceText === 'string' && req.body.sourceText.trim().length ? req.body.sourceText : undefined,
-    githubRepoUrl: typeof req.body.githubRepoUrl === 'string' && req.body.githubRepoUrl.trim().length ? req.body.githubRepoUrl : undefined
+    githubRepoUrl: typeof req.body.githubRepoUrl === 'string' && req.body.githubRepoUrl.trim().length ? req.body.githubRepoUrl : undefined,
+    llmModelId: typeof req.body.llmModelId === 'string' && req.body.llmModelId.trim().length ? req.body.llmModelId : undefined,
+    embeddingModelId: typeof req.body.embeddingModelId === 'string' ? (req.body.embeddingModelId.trim().length ? req.body.embeddingModelId : null) : undefined
   });
   if (!parsed.success) {
     return { error: parsed.error.issues.map((issue) => issue.message).join('; '), topic: typeof req.body.topic === 'string' ? req.body.topic : undefined };
@@ -336,12 +343,48 @@ type GroupQuizGenerationError = {
   message: string;
 };
 
+async function resolveGenerationConfigs(
+  userId: string,
+  llmModelId?: string,
+  embeddingModelId?: string | null
+) {
+  let llmConfig = llmModelId ? await resolveLLMConfig(llmModelId, userId) : null;
+  if (!llmConfig) llmConfig = await getDefaultLLMConfig(userId);
+  if (!llmConfig) {
+    llmConfig = {
+      provider: config.LLM_API_STYLE,
+      baseUrl: config.LLM_BASE_URL,
+      apiKey: config.LLM_API_KEY,
+      modelId: config.LLM_MODEL,
+      maxTokens: config.LLM_MAX_TOKENS,
+      temperature: config.LLM_TEMPERATURE
+    };
+  }
+
+  let embeddingConfig: EmbeddingConfig | null = null;
+  if (embeddingModelId === null) {
+    embeddingConfig = null;
+  } else if (embeddingModelId) {
+    embeddingConfig = await resolveEmbeddingConfig(embeddingModelId, userId);
+  } else {
+    embeddingConfig = await getDefaultEmbeddingConfig(userId);
+  }
+
+  return { llmConfig, embeddingConfig };
+}
+
 async function createQuizFromGenerationRequest(
   parsed: ParsedSourceRequest,
+  userId: string,
   onProgress?: (update: JobProgressUpdate) => void
 ) {
+  const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(
+    userId, parsed.llmModelId, parsed.embeddingModelId
+  );
   onProgress?.({ currentStep: 'Preparing sources', stepIndex: 2, message: null });
   const llm = await generateQuizFromLLM(
+    llmConfig,
+    embeddingConfig,
     parsed.topic,
     parsed.settings,
     {
@@ -368,12 +411,18 @@ async function createQuizFromGenerationRequest(
 
 async function createGroupProposal(
   parsed: ParsedSourceRequest,
+  userId: string,
   minQuizCount: number,
   maxQuizCount: number,
   onProgress?: (update: JobProgressUpdate) => void
 ) {
+  const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(
+    userId, parsed.llmModelId, parsed.embeddingModelId
+  );
   onProgress?.({ currentStep: 'Preparing sources', stepIndex: 2, message: null });
   const proposal = await proposeGroupQuizFromLLM(
+    llmConfig,
+    embeddingConfig,
     parsed.topic,
     parsed.settings,
     {
@@ -397,16 +446,23 @@ async function createGroupProposal(
 async function createGroupQuiz(
   parsed: z.infer<typeof groupGenerateRequestSchema>,
   files: Express.Multer.File[],
+  userId: string,
   onProgress?: (update: JobProgressUpdate) => void
 ) {
+  const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(
+    userId, parsed.llmModelId, parsed.embeddingModelId
+  );
   let completedCount = 0;
   onProgress?.({
     currentStep: 'Preparing sources',
     stepIndex: 2,
     doneCount: 0,
     totalCount: parsed.items.length,
-    message: null
+    message: 'Generating context'
   });
+
+  const basePrompt = parsed.items[0];
+
   const { rows: maxPosRows } = await pool.query('SELECT COALESCE(MAX(position), -1)::int AS max_pos FROM quiz_groups');
   const position = maxPosRows[0].max_pos + 1;
   const { rows: groupRows } = await pool.query(
@@ -418,6 +474,8 @@ async function createGroupQuiz(
   const generationResults = await Promise.allSettled(parsed.items.map(async (item, index) => {
     const itemLabel = `Generating quiz ${index + 1}/${parsed.items.length}`;
     const llm = await generateQuizFromLLM(
+      llmConfig,
+      embeddingConfig,
       `${parsed.topic}\n\nQuiz title: ${item.title}\nQuiz focus: ${item.focus}`,
       parsed.settings,
       {
@@ -428,7 +486,7 @@ async function createGroupQuiz(
       undefined,
       undefined,
       {
-        onProgress: (step) => onProgress?.({
+        onProgress: (step: string) => onProgress?.({
           currentStep: itemLabel,
           stepIndex: step === 'Validating output' ? 5 : step === 'Calling model' ? 4 : 3,
           doneCount: completedCount,
@@ -505,6 +563,7 @@ async function createGroupQuiz(
 async function regenerateQuiz(
   quizId: string,
   payload: z.infer<typeof regenerateSchema>,
+  userId: string,
   onProgress?: (update: JobProgressUpdate) => void
 ) {
   const { rows } = await pool.query(
@@ -519,15 +578,19 @@ async function regenerateQuiz(
   const settings = payload.settings ?? (quiz.settings as QuizSettings);
   const existingQuestions = quiz.questions as QuizQuestion[];
 
+  const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(userId);
+
   onProgress?.({ currentStep: 'Preparing sources', stepIndex: 2, message: null });
   const llm = await generateQuizFromLLM(
+    llmConfig,
+    embeddingConfig,
     quiz.topic,
     settings,
     {},
     existingQuestions,
     payload.prompt,
     {
-      onProgress: (step) => onProgress?.({ currentStep: step, stepIndex: step === 'Validating output' ? 5 : step === 'Calling model' ? 4 : 3 })
+      onProgress: (step: string) => onProgress?.({ currentStep: step, stepIndex: step === 'Validating output' ? 5 : step === 'Calling model' ? 4 : 3 })
     }
   );
 
@@ -555,6 +618,7 @@ async function regenerateQuiz(
 async function regenerateGroup(
   groupId: string,
   payload: z.infer<typeof regenerateSchema>,
+  userId: string,
   onProgress?: (update: JobProgressUpdate) => void
 ) {
   if (!payload.settings) {
@@ -595,17 +659,21 @@ async function regenerateGroup(
     targetGroupId = newGroup[0].id;
   }
 
+  const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(userId);
+
   const results = await Promise.allSettled(quizzes.map(async (quiz, index) => {
     const existingQuestions = quiz.questions as QuizQuestion[];
     const itemLabel = `Generating quiz ${index + 1}/${quizzes.length}`;
     const llm = await generateQuizFromLLM(
+      llmConfig,
+      embeddingConfig,
       quiz.topic,
       payload.settings!,
       {},
       existingQuestions,
       payload.prompt,
       {
-        onProgress: (step) => onProgress?.({
+        onProgress: (step: string) => onProgress?.({
           currentStep: itemLabel,
           stepIndex: step === 'Validating output' ? 5 : step === 'Calling model' ? 4 : 3,
           doneCount: completedCount,
@@ -722,7 +790,7 @@ app.post('/api/jobs/quizzes/generate', authRequired, generateLimiter, upload.arr
         }))
       }
     });
-    const result = await createQuizFromGenerationRequest(parsed, (update) => updateGenerationJob(job.id, update));
+    const result = await createQuizFromGenerationRequest(parsed, req.user!.id, (update) => updateGenerationJob(job.id, update));
     logger.info('quiz_generate.completed', {
       jobId: job.id,
       quizId: result.id,
@@ -762,6 +830,7 @@ app.post('/api/jobs/group-quizzes/propose', authRequired, generateLimiter, uploa
   startGenerationJob(job, async () => {
     const result = await createGroupProposal(
       sourceParsed,
+      req.user!.id,
       proposalParsed.data.minQuizCount,
       proposalParsed.data.maxQuizCount,
       (update) => updateGenerationJob(job.id, update)
@@ -808,7 +877,7 @@ app.post('/api/jobs/group-quizzes/generate', authRequired, generateLimiter, uplo
     doneCount: 0
   });
   startGenerationJob(job, async () => {
-    const result = await createGroupQuiz(parsed.data, sourceParsed.files, (update) => updateGenerationJob(job.id, update));
+    const result = await createGroupQuiz(parsed.data, sourceParsed.files, req.user!.id, (update) => updateGenerationJob(job.id, update));
     logger.info('group_quiz_generate.completed', {
       jobId: job.id,
       groupId: result.groupId,
@@ -830,7 +899,7 @@ app.post('/api/jobs/quizzes/:id/regenerate', authRequired, generateLimiter, asyn
   const job = createGenerationJob('quiz_regenerate');
   startGenerationJob(job, async () => {
     const started = Date.now();
-    const result = await regenerateQuiz(req.params.id, parsed.data, (update) => updateGenerationJob(job.id, update));
+    const result = await regenerateQuiz(req.params.id, parsed.data, req.user!.id, (update) => updateGenerationJob(job.id, update));
     logger.info(`quiz_regenerated.${parsed.data.mode}`, {
       jobId: job.id,
       quizId: result.id,
@@ -861,7 +930,7 @@ app.post('/api/jobs/groups/:id/regenerate', authRequired, generateLimiter, async
   });
   startGenerationJob(job, async () => {
     const started = Date.now();
-    const result = await regenerateGroup(req.params.id, parsed.data, (update) => updateGenerationJob(job.id, update));
+    const result = await regenerateGroup(req.params.id, parsed.data, req.user!.id, (update) => updateGenerationJob(job.id, update));
     logger.info('group_regenerate.completed', {
       jobId: job.id,
       groupId: req.params.id,
@@ -932,27 +1001,15 @@ app.post('/api/quizzes/generate', authRequired, generateLimiter, upload.array('d
           bytes: file.size
         }))
       },
-      llm: {
-        style: config.LLM_API_STYLE,
-        baseUrl: config.LLM_BASE_URL,
-        model: config.LLM_MODEL,
-        maxTokens: config.LLM_MAX_TOKENS,
-        temperature: config.LLM_TEMPERATURE
-      },
-      retrieval: {
-        embeddingStyle: config.EMBEDDING_API_STYLE,
-        embeddingBaseUrl: config.EMBEDDING_BASE_URL || config.LLM_BASE_URL,
-        embeddingModel: config.EMBEDDING_MODEL,
-        maxRetrievedChunks: config.MAX_RETRIEVED_CHUNKS,
-        maxRetrievedChars: config.MAX_RETRIEVED_CHARS,
-        maxEmbeddingCandidates: config.MAX_EMBEDDING_CANDIDATES
-      },
       scoring: {
         multiSelectPenaltyAlpha: config.MULTI_SELECT_PENALTY_ALPHA
       }
     });
 
-    const llm = await generateQuizFromLLM(parsed.topic, parsed.settings, {
+    const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(
+      req.user!.id, parsed.llmModelId, parsed.embeddingModelId
+    );
+    const llm = await generateQuizFromLLM(llmConfig, embeddingConfig, parsed.topic, parsed.settings, {
       sourceText: parsed.sourceText,
       githubRepoUrl: parsed.githubRepoUrl,
       documents: parsed.files
@@ -1004,7 +1061,12 @@ app.post('/api/group-quizzes/propose', authRequired, generateLimiter, upload.arr
   }
 
   try {
+    const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(
+      req.user!.id, sourceParsed.llmModelId, sourceParsed.embeddingModelId
+    );
     const proposal = await proposeGroupQuizFromLLM(
+      llmConfig,
+      embeddingConfig,
       proposalParsed.data.topic,
       proposalParsed.data.settings,
       {
@@ -1056,6 +1118,9 @@ app.post('/api/group-quizzes/generate', authRequired, generateLimiter, upload.ar
   }
 
   try {
+    const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(
+      req.user!.id, sourceParsed.llmModelId, sourceParsed.embeddingModelId
+    );
     const { rows: maxPosRows } = await pool.query('SELECT COALESCE(MAX(position), -1)::int AS max_pos FROM quiz_groups');
     const position = maxPosRows[0].max_pos + 1;
     const { rows: groupRows } = await pool.query(
@@ -1066,6 +1131,8 @@ app.post('/api/group-quizzes/generate', authRequired, generateLimiter, upload.ar
 
     const generationResults = await Promise.allSettled(parsed.data.items.map(async (item) => {
       const llm = await generateQuizFromLLM(
+        llmConfig,
+        embeddingConfig,
         `${parsed.data.topic}\n\nQuiz title: ${item.title}\nQuiz focus: ${item.focus}`,
         parsed.data.settings,
         {
@@ -1233,7 +1300,8 @@ app.post('/api/quizzes/:id/regenerate', authRequired, generateLimiter, asyncRout
 
   const started = Date.now();
   try {
-    const llm = await generateQuizFromLLM(quiz.topic, settings, {}, existingQuestions, prompt);
+    const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(req.user!.id);
+    const llm = await generateQuizFromLLM(llmConfig, embeddingConfig, quiz.topic, settings, {}, existingQuestions, prompt);
     
     if (mode === 'overwrite') {
       const { rows: updated } = await pool.query(
@@ -1393,8 +1461,9 @@ app.post('/api/groups/:id/regenerate', authRequired, generateLimiter, asyncRoute
   }
 
   const results = await Promise.allSettled(quizzes.map(async (quiz) => {
+    const { llmConfig, embeddingConfig } = await resolveGenerationConfigs(req.user!.id);
     const existingQuestions = quiz.questions as QuizQuestion[];
-    const llm = await generateQuizFromLLM(quiz.topic, settings, {}, existingQuestions, prompt);
+    const llm = await generateQuizFromLLM(llmConfig, embeddingConfig, quiz.topic, settings, {}, existingQuestions, prompt);
 
     if (mode === 'overwrite') {
       const { rows } = await pool.query(
@@ -1479,10 +1548,11 @@ app.post('/api/attempts', authRequired, asyncRoute(async (req, res) => {
   let freeTextScore = 0;
 
   if (freeTextQuestions.length > 0) {
+    const { llmConfig } = await resolveGenerationConfigs(req.user!.id);
     const freeTextAnswers = normalizedAnswers
       .filter((a) => freeTextQuestions.some((q) => q.id === a.questionId))
       .map((a) => ({ questionId: a.questionId, text: a.freeText ?? '' }));
-    evaluations = await evaluateFreeTextAnswers(freeTextQuestions, freeTextAnswers, {
+    evaluations = await evaluateFreeTextAnswers(llmConfig, freeTextQuestions, freeTextAnswers, {
       title: quiz.rows[0].title,
       topic: quiz.rows[0].topic
     });
@@ -1872,11 +1942,19 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
     await client.query('COMMIT');
 
     if (freeTextQuestions.length > 0) {
+      const guestLlmConfig: LLMConfig = {
+        provider: config.LLM_API_STYLE,
+        baseUrl: config.LLM_BASE_URL,
+        apiKey: config.LLM_API_KEY,
+        modelId: config.LLM_MODEL,
+        maxTokens: config.LLM_MAX_TOKENS,
+        temperature: config.LLM_TEMPERATURE
+      };
       const quizInfo = await pool.query('SELECT title, topic FROM quizzes WHERE id = $1', [share.quiz_id]);
       const freeTextAnswers = normalizedAnswers
         .filter((a) => freeTextQuestions.some((q) => q.id === a.questionId))
         .map((a) => ({ questionId: a.questionId, text: a.freeText ?? '' }));
-      evaluations = await evaluateFreeTextAnswers(freeTextQuestions, freeTextAnswers, {
+      evaluations = await evaluateFreeTextAnswers(guestLlmConfig, freeTextQuestions, freeTextAnswers, {
         title: quizInfo.rows[0].title,
         topic: quizInfo.rows[0].topic
       });

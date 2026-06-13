@@ -98,6 +98,7 @@ export interface Model {
   apiKeyEncrypted: string;
   apiKeyMasked: string;
   baseUrl: string | null;
+  providerId: string | null;
   maxTokens: number | null;
   temperature: number | null;
   maxRetrievedChunks: number | null;
@@ -115,10 +116,11 @@ export interface Model {
 export interface ModelInput {
   label: string;
   modelType?: ModelType;
-  provider: string;
+  provider?: string;
   modelId: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl?: string;
+  providerId?: string;
   maxTokens?: number;
   temperature?: number;
   maxRetrievedChunks?: number;
@@ -169,4 +171,35 @@ export interface EmbeddingConfig {
   maxRetrievedChunks?: number;
   maxRetrievedChars?: number;
   batchSize?: number;
+}
+
+// ─── Providers ─────────────────────────────────────────────────────────────────
+
+export interface Provider {
+  id: string;
+  label: string;
+  provider: string;
+  baseUrl: string | null;
+  apiKeyEncrypted: string;
+  apiKeyMasked: string;
+  createdBy: string;
+  isSystem: boolean;
+  assignedTo: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderInput {
+  label: string;
+  provider: string;
+  apiKey: string;
+  baseUrl?: string;
+  isSystem?: boolean;
+}
+
+export interface ProviderUpdateInput {
+  label?: string;
+  provider?: string;
+  apiKey?: string;
+  baseUrl?: string;
 }

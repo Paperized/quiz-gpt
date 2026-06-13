@@ -3,7 +3,7 @@ import pdfParse from '@cedrugs/pdf-parse';
 import { config } from './config.js';
 import { embedTexts, rankByEmbeddingSimilarity } from './embeddings.js';
 import { logger, summarizeText } from './logger.js';
-import type { EffectiveSettings } from './settings.js';
+import type { EmbeddingConfig } from './types.js';
 
 export type SourceInputs = {
   sourceText?: string;
@@ -289,7 +289,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
   return repoDocs;
 }
 
-async function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[], cfg: EffectiveSettings): Promise<string> {
+async function buildRetrievedContext(topic: string, settingsSummary: string, documents: SourceDocument[], cfg: typeof config, embeddingConfig: EmbeddingConfig | null): Promise<string> {
   const queryTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
   const chunks: ScoredChunk[] = [];
 
@@ -322,44 +322,50 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
     }
   }
 
+  const maxCandidates = embeddingConfig?.maxCandidates ?? cfg.MAX_EMBEDDING_CANDIDATES;
+  const maxChunks = embeddingConfig?.maxRetrievedChunks ?? cfg.MAX_RETRIEVED_CHUNKS;
+  const maxChars = embeddingConfig?.maxRetrievedChars ?? cfg.MAX_RETRIEVED_CHARS;
+
   const preSelected = chunks
     .sort((a, b) => b.score - a.score)
-    .slice(0, cfg.MAX_EMBEDDING_CANDIDATES);
+    .slice(0, maxCandidates);
 
   if (!preSelected.length) return '';
 
-  try {
-    const query = `Topic: ${topic}\nSettings: ${settingsSummary}`;
-    const embeddings = await embedTexts([query, ...preSelected.map((chunk) => chunk.text)]);
-    const queryEmbedding = embeddings[0];
-    const candidateEmbeddings = embeddings.slice(1);
-    const semanticScores = rankByEmbeddingSimilarity(queryEmbedding, candidateEmbeddings);
+  if (embeddingConfig) {
+    try {
+      const query = `Topic: ${topic}\nSettings: ${settingsSummary}`;
+      const embeddings = await embedTexts([query, ...preSelected.map((chunk) => chunk.text)], embeddingConfig);
+      const queryEmbedding = embeddings[0];
+      const candidateEmbeddings = embeddings.slice(1);
+      const semanticScores = rankByEmbeddingSimilarity(queryEmbedding, candidateEmbeddings);
 
-    preSelected.forEach((chunk, idx) => {
-      const semantic = semanticScores[idx] ?? 0;
-      chunk.semanticScore = semantic;
-      chunk.score = (semantic * 100) + chunk.lexicalScore;
-    });
-    logger.info('retrieval.embedding_ranked', {
-      candidates: preSelected.length,
-      embeddingStyle: cfg.EMBEDDING_API_STYLE,
-      embeddingModel: cfg.EMBEDDING_MODEL
-    });
-  } catch (error) {
-    logger.warn('retrieval.embedding_failed_fallback_lexical', {
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+      preSelected.forEach((chunk, idx) => {
+        const semantic = semanticScores[idx] ?? 0;
+        chunk.semanticScore = semantic;
+        chunk.score = (semantic * 100) + chunk.lexicalScore;
+      });
+      logger.info('retrieval.embedding_ranked', {
+        candidates: preSelected.length,
+        embeddingStyle: embeddingConfig.provider,
+        embeddingModel: embeddingConfig.modelId
+      });
+    } catch (error) {
+      logger.warn('retrieval.embedding_failed_fallback_lexical', {
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   const selected = preSelected
     .sort((a, b) => b.score - a.score)
-    .slice(0, cfg.MAX_RETRIEVED_CHUNKS);
+    .slice(0, maxChunks);
 
   const sections: string[] = [];
   let total = 0;
   for (const chunk of selected) {
     const block = `Source: ${chunk.label}\n${chunk.text}`;
-    if ((total + block.length) > cfg.MAX_RETRIEVED_CHARS) break;
+    if ((total + block.length) > maxChars) break;
     sections.push(block);
     total += block.length;
   }
@@ -369,14 +375,14 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
     preSelected: preSelected.length,
     selected: sections.length,
     chars: total,
-    maxRetrievedChunks: cfg.MAX_RETRIEVED_CHUNKS,
-    maxRetrievedChars: cfg.MAX_RETRIEVED_CHARS
+    maxRetrievedChunks: maxChunks,
+    maxRetrievedChars: maxChars
   });
 
   return sections.join('\n\n---\n\n');
 }
 
-export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs, cfg: EffectiveSettings): Promise<string> {
+export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs, cfg: typeof config, embeddingConfig: EmbeddingConfig | null): Promise<string> {
   const docs: SourceDocument[] = [];
   const topicTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
   logger.info('source_context.build_started', {
@@ -427,7 +433,7 @@ export async function buildSourceContext(topic: string, settingsSummary: string,
     return '';
   }
 
-  const context = await buildRetrievedContext(topic, settingsSummary, docs, cfg);
+  const context = await buildRetrievedContext(topic, settingsSummary, docs, cfg, embeddingConfig);
   logger.info('source_context.build_completed', {
     documents: docs.length,
     contextChars: context.length

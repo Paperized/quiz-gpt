@@ -5,13 +5,12 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { logger, summarizeText } from './logger.js';
-import type { QuizQuestion, QuizSettings, FreeTextEvaluation } from './types.js';
+import type { QuizQuestion, QuizSettings, FreeTextEvaluation, LLMConfig, EmbeddingConfig } from './types.js';
 import { QUESTION_TYPES } from './types.js';
 import type { QuestionType, ResponseType } from './types.js';
 import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
-import { getEffectiveSettings } from './settings.js';
-import type { EffectiveSettings } from './settings.js';
+import { config } from './config.js';
 import { buildDifficultyPromptGuidance, getDifficultyBand } from './difficulty.js';
 
 const outputSchema = z.object({
@@ -73,7 +72,7 @@ export function extractJsonPayload(text: string): string {
 async function generateStructuredOutput<T>(
   model: ReturnType<typeof getModel>,
   schema: z.ZodType<T>,
-  cfg: EffectiveSettings,
+  cfg: LLMConfig,
   system: string,
   prompt: string
 ): Promise<T> {
@@ -81,7 +80,7 @@ async function generateStructuredOutput<T>(
     const { object } = await generateObject({
       model,
       schema,
-      maxOutputTokens: cfg.LLM_MAX_TOKENS,
+      maxOutputTokens: cfg.maxTokens,
       system,
       prompt
     });
@@ -94,7 +93,7 @@ async function generateStructuredOutput<T>(
 
     const { text } = await generateText({
       model,
-      maxOutputTokens: cfg.LLM_MAX_TOKENS,
+      maxOutputTokens: cfg.maxTokens,
       system,
       prompt
     });
@@ -103,36 +102,36 @@ async function generateStructuredOutput<T>(
   }
 }
 
-function getModel(cfg: EffectiveSettings) {
-  if (!cfg.LLM_API_KEY) {
-    throw new Error('LLM_API_KEY is empty. Set it to generate quizzes.');
+function getModel(cfg: LLMConfig) {
+  if (!cfg.apiKey) {
+    throw new Error('LLM API key is empty. Set it to generate quizzes.');
   }
 
-  if (cfg.LLM_API_STYLE === 'anthropic') {
+  if (cfg.provider === 'anthropic') {
     const anthropic = createAnthropic({
-      apiKey: cfg.LLM_API_KEY,
-      baseURL: cfg.LLM_BASE_URL,
+      apiKey: cfg.apiKey,
+      baseURL: cfg.baseUrl,
       headers: {
-        'anthropic-version': cfg.ANTHROPIC_VERSION
+        'anthropic-version': config.ANTHROPIC_VERSION
       }
     });
-    return anthropic(cfg.LLM_MODEL);
+    return anthropic(cfg.modelId);
   }
 
-  if (cfg.LLM_API_STYLE === 'openai_compatible') {
+  if (cfg.provider === 'openai_compatible') {
     const provider = createOpenAICompatible({
       name: 'compatible',
-      apiKey: cfg.LLM_API_KEY,
-      baseURL: cfg.LLM_BASE_URL
+      apiKey: cfg.apiKey,
+      baseURL: cfg.baseUrl
     });
-    return provider(cfg.LLM_MODEL);
+    return provider(cfg.modelId);
   }
 
   const openai = createOpenAI({
-    apiKey: cfg.LLM_API_KEY,
-    baseURL: cfg.LLM_BASE_URL
+    apiKey: cfg.apiKey,
+    baseURL: cfg.baseUrl
   });
-  return openai(cfg.LLM_MODEL);
+  return openai(cfg.modelId);
 }
 
 export function sanitizeQuestions(
@@ -218,6 +217,8 @@ function responseTypeToQuestionTypes(rt: ResponseType): QuestionType[] {
 }
 
 export async function generateQuizFromLLM(
+  llmConfig: LLMConfig,
+  embeddingConfig: EmbeddingConfig | null,
   topic: string,
   settings: QuizSettings,
   sources: SourceInputs,
@@ -226,7 +227,6 @@ export async function generateQuizFromLLM(
   progress?: LlmProgressCallbacks
 ): Promise<{ title: string; questions: QuizQuestion[]; contextUsed: boolean; }> {
   progress?.onProgress?.('Preparing sources');
-  const cfg = await getEffectiveSettings();
 
   const settingsSummary = [
     `numQuestions=${settings.numQuestions}`,
@@ -238,21 +238,19 @@ export async function generateQuizFromLLM(
   const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
   progress?.onProgress?.('Retrieving context');
-  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, cfg);
-  const model = getModel(cfg);
+  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, config, embeddingConfig);
+  const model = getModel(llmConfig);
   logger.info('llm.generate_object.requested', {
     topic: summarizeText(topic),
     settings,
     contextUsed: Boolean(retrievedContext),
     contextChars: retrievedContext.length,
     isRegeneration: Boolean(existingQuestions),
-    provider: {
-      style: cfg.LLM_API_STYLE,
-      baseUrl: cfg.LLM_BASE_URL,
-      model: cfg.LLM_MODEL,
-      maxTokens: cfg.LLM_MAX_TOKENS,
-      temperature: cfg.LLM_TEMPERATURE
-    }
+    provider: llmConfig.provider,
+    baseUrl: llmConfig.baseUrl,
+    model: llmConfig.modelId,
+    maxTokens: llmConfig.maxTokens,
+    temperature: llmConfig.temperature
   });
 
   const isRegeneration = existingQuestions && existingQuestions.length > 0;
@@ -302,7 +300,7 @@ export async function generateQuizFromLLM(
   try {
     const started = Date.now();
     progress?.onProgress?.('Calling model');
-    generated = await generateStructuredOutput(model, outputSchema, cfg, system, prompt);
+    generated = await generateStructuredOutput(model, outputSchema, llmConfig, system, prompt);
     progress?.onProgress?.('Validating output');
     logger.info('llm.generate_object.completed', {
       title: generated.title,
@@ -311,8 +309,8 @@ export async function generateQuizFromLLM(
     });
   } catch (error) {
     logger.error('llm.generate_object.failed', error, {
-      providerStyle: cfg.LLM_API_STYLE,
-      model: cfg.LLM_MODEL
+      providerStyle: llmConfig.provider,
+      model: llmConfig.modelId
     });
     throw new Error(`LLM generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
@@ -325,6 +323,8 @@ export async function generateQuizFromLLM(
 }
 
 export async function proposeGroupQuizFromLLM(
+  llmConfig: LLMConfig,
+  embeddingConfig: EmbeddingConfig | null,
   topic: string,
   settings: QuizSettings,
   sources: SourceInputs,
@@ -333,7 +333,6 @@ export async function proposeGroupQuizFromLLM(
   progress?: LlmProgressCallbacks
 ): Promise<{ groupTitle: string; items: Array<{ title: string; focus: string; }>; contextUsed: boolean; }> {
   progress?.onProgress?.('Preparing sources');
-  const cfg = await getEffectiveSettings();
   const settingsSummary = [
     `numQuestions=${settings.numQuestions}`,
     `choicesPerQuestion=${settings.choicesPerQuestion}`,
@@ -344,8 +343,8 @@ export async function proposeGroupQuizFromLLM(
   const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
   progress?.onProgress?.('Retrieving context');
-  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, cfg);
-  const model = getModel(cfg);
+  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, config, embeddingConfig);
+  const model = getModel(llmConfig);
 
   const system = [
     'You are a curriculum and assessment designer.',
@@ -375,7 +374,7 @@ export async function proposeGroupQuizFromLLM(
   try {
     const started = Date.now();
     progress?.onProgress?.('Calling model');
-    const parsed = await generateStructuredOutput(model, groupProposalSchema, cfg, system, prompt);
+    const parsed = await generateStructuredOutput(model, groupProposalSchema, llmConfig, system, prompt);
     progress?.onProgress?.('Validating output');
     logger.info('llm.group_proposal.completed', {
       groupTitle: parsed.groupTitle,
@@ -389,20 +388,20 @@ export async function proposeGroupQuizFromLLM(
     };
   } catch (error) {
     logger.error('llm.group_proposal.failed', error, {
-      providerStyle: cfg.LLM_API_STYLE,
-      model: cfg.LLM_MODEL
+      providerStyle: llmConfig.provider,
+      model: llmConfig.modelId
     });
     throw new Error(`LLM group proposal failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 }
 
 export async function evaluateFreeTextAnswers(
+  llmConfig: LLMConfig,
   questions: QuizQuestion[],
   answers: { questionId: string; text: string }[],
   quizContext: { title: string; topic: string }
 ): Promise<FreeTextEvaluation[]> {
-  const cfg = await getEffectiveSettings();
-  const model = getModel(cfg);
+  const model = getModel(llmConfig);
 
   const questionIds = questions.map((q) => q.id);
 
@@ -434,15 +433,15 @@ export async function evaluateFreeTextAnswers(
 
   logger.info('llm.free_text_evaluation.requested', {
     questionCount: questions.length,
-    providerStyle: cfg.LLM_API_STYLE,
-    model: cfg.LLM_MODEL
+    providerStyle: llmConfig.provider,
+    model: llmConfig.modelId
   });
 
   try {
     const started = Date.now();
     const { text } = await generateText({
       model,
-      maxOutputTokens: cfg.LLM_MAX_TOKENS,
+      maxOutputTokens: llmConfig.maxTokens,
       system,
       prompt
     });
@@ -476,8 +475,8 @@ export async function evaluateFreeTextAnswers(
     return evaluations;
   } catch (error) {
     logger.error('llm.free_text_evaluation.failed', error, {
-      providerStyle: cfg.LLM_API_STYLE,
-      model: cfg.LLM_MODEL
+      providerStyle: llmConfig.provider,
+      model: llmConfig.modelId
     });
     throw new Error(`Free-text evaluation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }

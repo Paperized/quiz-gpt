@@ -8,5 +8,3 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS max_embedding_candidates INTEGER;
 ALTER TABLE models ADD COLUMN IF NOT EXISTS embedding_batch_size INTEGER;
 
 ALTER TABLE model_access ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
-
-DROP TABLE IF EXISTS app_settings;

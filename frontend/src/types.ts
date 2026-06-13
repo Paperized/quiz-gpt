@@ -234,6 +234,7 @@ export interface Model {
   modelId: string;
   apiKeyMasked: string;
   baseUrl: string | null;
+  providerId: string | null;
   maxTokens: number | null;
   temperature: number | null;
   maxRetrievedChunks: number | null;
@@ -243,6 +244,19 @@ export interface Model {
   createdBy: string;
   isSystem: boolean;
   isDefault: boolean;
+  assignedTo: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Provider {
+  id: string;
+  label: string;
+  provider: string;
+  baseUrl: string | null;
+  apiKeyMasked: string;
+  createdBy: string;
+  isSystem: boolean;
   assignedTo: string[] | null;
   createdAt: string;
   updatedAt: string;

@@ -7,7 +7,7 @@ import { GenerationProgressDialog, GenerationStatusPanel, useGenerationJob } fro
 import { useQuizzes } from '../context';
 import { req } from '../api';
 import { defaultSettings } from '../helpers';
-import type { JobCreatedResponse, Quiz, QuizSettings } from '../types';
+import type { JobCreatedResponse, Quiz, QuizSettings, Model } from '../types';
 
 // ─── Create Quiz Page ('/') ────────────────────────────────────────────────────
 
@@ -22,7 +22,22 @@ export function CreateQuizPage() {
   const [githubRepoUrl, setGithubRepoUrl] = useState('');
   const [documents, setDocuments] = useState<File[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [models, setModels] = useState<Model[]>([]);
+  const [llmModelId, setLlmModelId] = useState<string>('');
+  const [embeddingModelId, setEmbeddingModelId] = useState<string>('');
   const { job, pollError } = useGenerationJob<Quiz>(jobId);
+
+  useEffect(() => {
+    req<Model[]>('/api/models')
+      .then((data) => {
+        setModels(data);
+        const defaultLlm = data.find((m) => m.modelType === 'llm' && m.isDefault);
+        if (defaultLlm) setLlmModelId(defaultLlm.id);
+        const defaultEmb = data.find((m) => m.modelType === 'embedding' && m.isDefault);
+        if (defaultEmb) setEmbeddingModelId(defaultEmb.id);
+      })
+      .catch(() => {});
+  }, []);
   const loadingLabel = job
     ? job.totalCount !== null && job.doneCount !== null
       ? `${job.currentStep} (${job.doneCount}/${job.totalCount})`
@@ -60,6 +75,8 @@ export function CreateQuizPage() {
       const form = new FormData();
       form.append('topic', topic);
       form.append('settings', JSON.stringify(settings));
+      if (llmModelId) form.append('llmModelId', llmModelId);
+      form.append('embeddingModelId', embeddingModelId || '');
       if (sourceText.trim()) form.append('sourceText', sourceText.trim());
       if (githubRepoUrl.trim()) form.append('githubRepoUrl', githubRepoUrl.trim());
       for (const f of documents) form.append('documents', f);
@@ -89,6 +106,20 @@ export function CreateQuizPage() {
                   <Icon name="edit_note" size={16} className="text-text-muted" />
                   Primary Topic or Instruction
                 </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-text-muted font-geist">Model</span>
+                  <select
+                    className="bg-surface border border-border-subtle text-on-surface text-[12px] rounded focus:border-secondary focus:ring-0 py-1.5 px-2"
+                    value={llmModelId}
+                    onChange={(e) => setLlmModelId(e.target.value)}
+                  >
+                    {models.filter((m) => m.modelType === 'llm').length === 0
+                      ? <option disabled value="">No models configured</option>
+                      : models.filter((m) => m.modelType === 'llm').map((m) => (
+                        <option key={m.id} value={m.id}>{m.label}{m.isSystem ? ' (system)' : ''}</option>
+                      ))}
+                  </select>
+                </div>
               </div>
               <textarea
                 id="quiz-topic"
@@ -102,11 +133,26 @@ export function CreateQuizPage() {
 
             {/* Sources */}
             <div className="bg-surface border border-border-subtle rounded-xl overflow-hidden">
-              <div className="p-4 border-b border-border-subtle bg-surface-container-low">
+              <div className="p-4 border-b border-border-subtle bg-surface-container-low flex justify-between items-center">
                 <h3 className="text-[12px] font-medium text-on-surface flex items-center gap-2 font-geist">
                   <Icon name="library_add" size={16} className="text-text-muted" />
                   Additional Context Sources (Optional)
                 </h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-text-muted font-geist">Embedding</span>
+                  <select
+                    className="bg-surface border border-border-subtle text-on-surface text-[12px] rounded focus:border-secondary focus:ring-0 py-1.5 px-2"
+                    value={embeddingModelId}
+                    onChange={(e) => setEmbeddingModelId(e.target.value)}
+                  >
+                    <option value="">None (lexical)</option>
+                    {models.filter((m) => m.modelType === 'embedding').length === 0
+                      ? <option disabled value="">No models configured</option>
+                      : models.filter((m) => m.modelType === 'embedding').map((m) => (
+                        <option key={m.id} value={m.id}>{m.label}{m.isSystem ? ' (system)' : ''}</option>
+                      ))}
+                  </select>
+                </div>
               </div>
               <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="border border-border-subtle rounded-lg p-3 hover:border-outline-variant transition-colors">

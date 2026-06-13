@@ -12,9 +12,10 @@ modelRoutes.use(authRequired);
 const modelCreateSchema = z.object({
   label: z.string().min(1).max(255),
   modelType: z.enum(['llm', 'embedding']).default('llm'),
-  provider: z.string().min(1).max(255),
+  providerId: z.string().uuid().optional(),
+  provider: z.enum(['openai', 'anthropic', 'openai_compatible']).optional(),
   modelId: z.string().min(1).max(255),
-  apiKey: z.string().min(1).max(1024),
+  apiKey: z.string().min(1).max(1024).optional(),
   baseUrl: z.string().max(1024).optional(),
   maxTokens: z.coerce.number().int().positive().optional(),
   temperature: z.coerce.number().min(0).max(2).optional(),
@@ -27,7 +28,7 @@ const modelCreateSchema = z.object({
 
 const modelUpdateSchema = z.object({
   label: z.string().min(1).max(255).optional(),
-  provider: z.string().min(1).max(255).optional(),
+  provider: z.enum(['openai', 'anthropic', 'openai_compatible']).optional(),
   modelId: z.string().min(1).max(255).optional(),
   apiKey: z.string().min(1).max(1024).optional(),
   baseUrl: z.string().max(1024).optional(),
@@ -44,16 +45,21 @@ const modelAccessSchema = z.object({
 });
 
 function modelRowToJson(m: Record<string, unknown>, encryptionKey: string, isDefault: boolean): Record<string, unknown> {
-  const apiKey = encryptionKey ? decryptValue(m.api_key_encrypted as string, encryptionKey) : '';
+  // If providerId is set, use JOINed provider fields; otherwise use model's own encrypted key
+  const provKey = m.p_api_key_encrypted as string | undefined;
+  const apiKey = provKey
+    ? (encryptionKey ? decryptValue(provKey, encryptionKey) : '')
+    : (encryptionKey ? decryptValue(m.api_key_encrypted as string, encryptionKey) : '');
   return {
     id: m.id,
     label: m.label,
     modelType: m.model_type,
-    provider: m.provider,
+    provider: (m.p_provider as string) || (m.provider as string),
     modelId: m.model_id,
-    apiKeyEncrypted: m.api_key_encrypted,
+    apiKeyEncrypted: provKey || (m.api_key_encrypted as string),
     apiKeyMasked: apiKey ? maskSecret(apiKey) : '••••••••',
-    baseUrl: m.base_url ?? null,
+    baseUrl: (m.p_base_url as string) || (m.base_url as string) || null,
+    providerId: m.provider_id ?? null,
     maxTokens: m.max_tokens ?? null,
     temperature: m.temperature ?? null,
     maxRetrievedChunks: m.max_retrieved_chunks ?? null,
@@ -84,21 +90,23 @@ modelRoutes.get('/', async (req, res) => {
 
     if (adm) {
       query = `
-        SELECT m.*,
+        SELECT m.*, p.provider AS p_provider, p.base_url AS p_base_url, p.api_key_encrypted AS p_api_key_encrypted,
           COALESCE(json_agg(ma.user_id) FILTER (WHERE ma.user_id IS NOT NULL), '[]'::json) AS assigned_to,
           EXISTS(SELECT 1 FROM model_access ma2 WHERE ma2.model_id = m.id AND ma2.user_id = $1 AND ma2.is_default = true) AS is_default
         FROM models m
+        LEFT JOIN providers p ON p.id = m.provider_id
         LEFT JOIN model_access ma ON ma.model_id = m.id
         WHERE (m.is_system = true) OR (m.is_system = false AND m.created_by = $1)
-        GROUP BY m.id
+        GROUP BY m.id, p.id
         ORDER BY m.model_type, m.is_system DESC, m.created_at DESC
       `;
       params = [req.user.id];
     } else {
       query = `
-        SELECT m.*, NULL::json AS assigned_to,
+        SELECT m.*, p.provider AS p_provider, p.base_url AS p_base_url, p.api_key_encrypted AS p_api_key_encrypted, NULL::json AS assigned_to,
           EXISTS(SELECT 1 FROM model_access ma WHERE ma.model_id = m.id AND ma.user_id = $1 AND ma.is_default = true) AS is_default
         FROM models m
+        LEFT JOIN providers p ON p.id = m.provider_id
         LEFT JOIN model_access ma ON ma.model_id = m.id AND ma.user_id = $1
         WHERE (m.is_system = true AND EXISTS (
           SELECT 1 FROM model_access ma2 WHERE ma2.model_id = m.id AND ma2.user_id = $1
@@ -136,7 +144,7 @@ modelRoutes.post('/', async (req, res) => {
       return;
     }
 
-    const { label, modelType, provider, modelId, apiKey, baseUrl, maxTokens, temperature, maxRetrievedChunks, maxRetrievedChars, maxEmbeddingCandidates, embeddingBatchSize, isSystem } = body.data;
+    const { label, modelType, providerId, provider, modelId, apiKey, baseUrl, maxTokens, temperature, maxRetrievedChunks, maxRetrievedChars, maxEmbeddingCandidates, embeddingBatchSize, isSystem } = body.data;
     const encryptionKey = config.SETTINGS_ENCRYPTION_KEY;
     if (!encryptionKey) {
       res.status(500).json({ error: 'Encryption not configured (SETTINGS_ENCRYPTION_KEY missing)' });
@@ -146,13 +154,32 @@ modelRoutes.post('/', async (req, res) => {
     const adm = isAdminUser(req);
     const finalIsSystem = adm ? (isSystem ?? false) : false;
 
-    const encrypted = encryptValue(apiKey, encryptionKey);
+    // If providerId is set, use provider config; otherwise use inline config
+    let encrypted: string | null = null;
+    let resolvedProvider: string | null = null;
+    let resolvedBaseUrl: string | null = null;
+
+    if (providerId) {
+      // Verify provider exists and user has access
+      const { rows: provs } = await pool.query<{ provider: string; base_url: string | null; is_system: boolean }>(
+        'SELECT provider, base_url, is_system FROM providers WHERE id = $1', [providerId]
+      );
+      if (provs.length === 0) { res.status(404).json({ error: 'Provider not found' }); return; }
+      resolvedProvider = provs[0].provider;
+      resolvedBaseUrl = provs[0].base_url;
+      // Don't store apiKey on model - it comes from the provider at query time
+    } else {
+      if (!provider || !apiKey) { res.status(400).json({ error: 'provider and apiKey required in manual mode' }); return; }
+      resolvedProvider = provider;
+      resolvedBaseUrl = baseUrl ?? null;
+      encrypted = encryptValue(apiKey, encryptionKey);
+    }
 
     const { rows } = await pool.query<Record<string, unknown>>(
-      `INSERT INTO models (label, model_type, provider, model_id, api_key_encrypted, base_url, max_tokens, temperature, max_retrieved_chunks, max_retrieved_chars, max_embedding_candidates, embedding_batch_size, created_by, is_system)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      `INSERT INTO models (label, model_type, provider, model_id, api_key_encrypted, base_url, provider_id, max_tokens, temperature, max_retrieved_chunks, max_retrieved_chars, max_embedding_candidates, embedding_batch_size, created_by, is_system)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING *`,
-      [label, modelType, provider, modelId, encrypted, baseUrl ?? null, maxTokens ?? null, temperature ?? null, maxRetrievedChunks ?? null, maxRetrievedChars ?? null, maxEmbeddingCandidates ?? null, embeddingBatchSize ?? null, req.user.id, finalIsSystem]
+      [label, modelType, resolvedProvider, modelId, encrypted ?? '', resolvedBaseUrl, providerId ?? null, maxTokens ?? null, temperature ?? null, maxRetrievedChunks ?? null, maxRetrievedChars ?? null, maxEmbeddingCandidates ?? null, embeddingBatchSize ?? null, req.user.id, finalIsSystem]
     );
 
     const model = rows[0];

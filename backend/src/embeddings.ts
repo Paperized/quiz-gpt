@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { logger } from './logger.js';
+import type { EmbeddingConfig } from './types.js';
 
 type RuntimeEmbeddingStyle = 'openai' | 'anthropic' | 'openai_compatible';
 
@@ -39,21 +40,16 @@ function resolveEmbeddingApiKey(): string {
 }
 
 function buildEndpoint(style: RuntimeEmbeddingStyle, baseUrl: string): string {
-  if (style === 'openai' || style === 'openai_compatible') {
-    if (baseUrl.endsWith('/v1')) return `${baseUrl}/embeddings`;
-    return `${baseUrl}/v1/embeddings`;
-  }
-
   if (baseUrl.endsWith('/v1')) return `${baseUrl}/embeddings`;
   return `${baseUrl}/v1/embeddings`;
 }
 
-function buildHeaders(style: RuntimeEmbeddingStyle, apiKey: string): Record<string, string> {
+function buildHeaders(style: RuntimeEmbeddingStyle, apiKey: string, anthropicVersion?: string): Record<string, string> {
   if (style === 'anthropic') {
     return {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
-      'anthropic-version': config.ANTHROPIC_VERSION,
+      'anthropic-version': anthropicVersion || config.ANTHROPIC_VERSION,
       Authorization: `Bearer ${apiKey}`
     };
   }
@@ -62,6 +58,13 @@ function buildHeaders(style: RuntimeEmbeddingStyle, apiKey: string): Record<stri
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`
   };
+}
+
+function normalizeProvider(provider: string): RuntimeEmbeddingStyle {
+  const lower = provider.toLowerCase();
+  if (lower === 'anthropic') return 'anthropic';
+  if (lower === 'openai') return 'openai';
+  return 'openai_compatible';
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -79,13 +82,16 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / denom;
 }
 
-async function requestEmbeddings(values: string[]): Promise<number[][]> {
+async function requestEmbeddingsDirect(
+  values: string[],
+  style: RuntimeEmbeddingStyle,
+  model: string,
+  baseUrl: string,
+  apiKey: string,
+  anthropicVersion?: string
+): Promise<number[][]> {
   if (!values.length) return [];
 
-  const style = resolveEmbeddingStyle();
-  const model = resolveEmbeddingModel(style);
-  const baseUrl = resolveEmbeddingBaseUrl();
-  const apiKey = resolveEmbeddingApiKey();
   const endpoint = buildEndpoint(style, baseUrl);
   const started = Date.now();
   logger.info('embeddings.requested', {
@@ -97,7 +103,7 @@ async function requestEmbeddings(values: string[]): Promise<number[][]> {
 
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: buildHeaders(style, apiKey),
+    headers: buildHeaders(style, apiKey, anthropicVersion),
     body: JSON.stringify({
       model,
       input: values
@@ -140,8 +146,31 @@ async function requestEmbeddings(values: string[]): Promise<number[][]> {
   return vectors;
 }
 
-export async function embedTexts(values: string[]): Promise<number[][]> {
+async function requestEmbeddings(values: string[]): Promise<number[][]> {
+  const style = resolveEmbeddingStyle();
+  const model = resolveEmbeddingModel(style);
+  const baseUrl = resolveEmbeddingBaseUrl();
+  const apiKey = resolveEmbeddingApiKey();
+  return requestEmbeddingsDirect(values, style, model, baseUrl, apiKey);
+}
+
+export async function embedTexts(values: string[], embeddingConfig?: EmbeddingConfig): Promise<number[][]> {
   const out: number[][] = [];
+
+  if (embeddingConfig) {
+    const style = normalizeProvider(embeddingConfig.provider);
+    const batchSize = embeddingConfig.batchSize ?? config.EMBEDDING_BATCH_SIZE;
+    for (let i = 0; i < values.length; i += batchSize) {
+      const slice = values.slice(i, i + batchSize);
+      const vectors = await requestEmbeddingsDirect(
+        slice, style, embeddingConfig.modelId,
+        normalizeBaseUrl(embeddingConfig.baseUrl), embeddingConfig.apiKey
+      );
+      out.push(...vectors);
+    }
+    return out;
+  }
+
   for (let i = 0; i < values.length; i += config.EMBEDDING_BATCH_SIZE) {
     const slice = values.slice(i, i + config.EMBEDDING_BATCH_SIZE);
     const vectors = await requestEmbeddings(slice);

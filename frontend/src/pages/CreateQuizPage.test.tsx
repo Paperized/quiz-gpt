@@ -32,7 +32,8 @@ describe('CreateQuizPage difficulty control', () => {
   });
 
   it('shows the numeric difficulty legend and submits difficulty as a number', async () => {
-    reqMock.mockResolvedValueOnce({ jobId: 'job-1' });
+    reqMock.mockResolvedValueOnce([]);           // models fetch
+    reqMock.mockResolvedValueOnce({ jobId: 'job-1' }); // generate
 
     renderPage();
 
@@ -52,10 +53,10 @@ describe('CreateQuizPage difficulty control', () => {
     fireEvent.click(screen.getByRole('button', { name: /Generate Quiz/i }));
 
     await waitFor(() => {
-      expect(reqMock).toHaveBeenCalledTimes(1);
+      expect(reqMock).toHaveBeenCalledTimes(2);
     });
 
-    const formData = reqMock.mock.calls[0][1]?.body as FormData;
+    const formData = reqMock.mock.calls[1][1]?.body as FormData;
     const rawSettings = formData.get('settings');
     expect(typeof rawSettings).toBe('string');
     expect(JSON.parse(rawSettings as string)).toMatchObject({
