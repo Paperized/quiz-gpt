@@ -27,6 +27,40 @@ const providerUpdateSchema = z.object({
 
 const accessSchema = z.object({ userId: z.string().uuid() });
 
+async function canAccessProvider(providerId: string, userId: string, isAdmin: boolean): Promise<boolean> {
+  const { rows } = await pool.query<{
+    created_by: string;
+    is_system: boolean;
+    has_access: boolean;
+  }>(
+    `SELECT p.created_by,
+            p.is_system,
+            EXISTS(
+              SELECT 1
+              FROM provider_access pa
+              WHERE pa.provider_id = p.id AND pa.user_id = $2
+            ) AS has_access
+     FROM providers p
+     WHERE p.id = $1`,
+    [providerId, userId]
+  );
+
+  if (rows.length === 0) {
+    return false;
+  }
+
+  const provider = rows[0];
+  if (provider.created_by === userId) {
+    return true;
+  }
+
+  if (provider.is_system) {
+    return isAdmin || provider.has_access;
+  }
+
+  return false;
+}
+
 function rowToJson(m: Record<string, unknown>, encryptionKey: string): Record<string, unknown> {
   const apiKey = encryptionKey ? decryptValue(m.api_key_encrypted as string, encryptionKey) : '';
   return {
@@ -236,6 +270,8 @@ providerRoutes.post('/:id/test', async (req, res) => {
   try {
     if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
     const { id } = req.params;
+    const allowed = await canAccessProvider(id, req.user.id, isAdminUser(req));
+    if (!allowed) { res.status(403).json({ error: 'Not authorized' }); return; }
     const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
       'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [id]
     );
@@ -281,6 +317,8 @@ providerRoutes.get('/:id/models', async (req, res) => {
   try {
     if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
     const { id } = req.params;
+    const allowed = await canAccessProvider(id, req.user.id, isAdminUser(req));
+    if (!allowed) { res.status(403).json({ error: 'Not authorized' }); return; }
     const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
       'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [id]
     );

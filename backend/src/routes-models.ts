@@ -45,6 +45,40 @@ const modelAccessSchema = z.object({
   userId: z.string().uuid(),
 });
 
+async function canAccessModel(modelId: string, userId: string, isAdmin: boolean): Promise<boolean> {
+  const { rows } = await pool.query<{
+    created_by: string;
+    is_system: boolean;
+    has_access: boolean;
+  }>(
+    `SELECT m.created_by,
+            m.is_system,
+            EXISTS(
+              SELECT 1
+              FROM model_access ma
+              WHERE ma.model_id = m.id AND ma.user_id = $2
+            ) AS has_access
+     FROM models m
+     WHERE m.id = $1`,
+    [modelId, userId]
+  );
+
+  if (rows.length === 0) {
+    return false;
+  }
+
+  const model = rows[0];
+  if (model.created_by === userId) {
+    return true;
+  }
+
+  if (model.is_system) {
+    return isAdmin || model.has_access;
+  }
+
+  return false;
+}
+
 function modelRowToJson(m: Record<string, unknown>, encryptionKey: string, isDefault: boolean): Record<string, unknown> {
   // If providerId is set, use JOINed provider fields; otherwise use model's own encrypted key
   const provKey = m.p_api_key_encrypted as string | undefined;
@@ -325,6 +359,11 @@ modelRoutes.put('/:id/default', async (req, res) => {
     }
 
     const { id } = req.params;
+    const allowed = await canAccessModel(id, req.user.id, isAdminUser(req));
+    if (!allowed) {
+      res.status(403).json({ error: 'Not authorized' });
+      return;
+    }
 
     // Get model type
     const { rows: models } = await pool.query<{ model_type: string }>(
@@ -428,6 +467,8 @@ modelRoutes.post('/:id/test', async (req, res) => {
   try {
     if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
     const { id } = req.params;
+    const allowed = await canAccessModel(id, req.user.id, isAdminUser(req));
+    if (!allowed) { res.status(403).json({ error: 'Not authorized' }); return; }
 
     const { rows } = await pool.query(
       `SELECT m.*,

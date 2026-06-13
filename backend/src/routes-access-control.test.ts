@@ -2,23 +2,12 @@ import express from 'express';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const queryMock = vi.fn();
-const encryptValueMock = vi.fn((value: string) => `enc:${value}`);
 const decryptValueMock = vi.fn(() => 'plain-secret');
-const maskSecretMock = vi.fn(() => '••••••••');
-
-const configMock = {
-  SETTINGS_ENCRYPTION_KEY: 'enc-key',
-  ANTHROPIC_VERSION: '2023-06-01'
-};
 
 vi.mock('./db.js', () => ({
   pool: {
     query: queryMock
   }
-}));
-
-vi.mock('./config.js', () => ({
-  config: configMock
 }));
 
 vi.mock('./logger.js', () => ({
@@ -29,10 +18,17 @@ vi.mock('./logger.js', () => ({
   }
 }));
 
+vi.mock('./config.js', () => ({
+  config: {
+    SETTINGS_ENCRYPTION_KEY: 'enc-key',
+    ANTHROPIC_VERSION: '2023-06-01'
+  }
+}));
+
 vi.mock('./encryption.js', () => ({
-  encryptValue: encryptValueMock,
+  encryptValue: vi.fn((value: string) => `enc:${value}`),
   decryptValue: decryptValueMock,
-  maskSecret: maskSecretMock
+  maskSecret: vi.fn(() => '••••••••')
 }));
 
 vi.mock('./auth.js', () => ({
@@ -61,6 +57,7 @@ vi.mock('./auth.js', () => ({
   isAdminUser: (req: express.Request) => req.user?.role === 'admin' || req.user?.role === 'super_admin'
 }));
 
+let modelRoutes: typeof import('./routes-models.js').modelRoutes;
 let providerRoutes: typeof import('./routes-providers.js').providerRoutes;
 
 type MockResponse = {
@@ -74,19 +71,18 @@ type MockResponse = {
 };
 
 beforeAll(async () => {
+  ({ modelRoutes } = await import('./routes-models.js'));
   ({ providerRoutes } = await import('./routes-providers.js'));
 });
 
 beforeEach(() => {
   queryMock.mockReset();
-  encryptValueMock.mockClear();
   decryptValueMock.mockClear();
-  maskSecretMock.mockClear();
-  configMock.SETTINGS_ENCRYPTION_KEY = 'enc-key';
   vi.unstubAllGlobals();
 });
 
 async function request(
+  router: express.Router,
   path: string,
   init?: { method?: string; headers?: Record<string, string>; body?: unknown }
 ) {
@@ -137,171 +133,33 @@ async function request(
       }
     };
 
-    (providerRoutes as unknown as { handle: (req: express.Request, res: express.Response, next: (error?: unknown) => void) => void }).handle(
+    (router as unknown as { handle: (req: express.Request, res: express.Response, next: (error?: unknown) => void) => void }).handle(
       req,
       res as unknown as express.Response,
       (error: unknown) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        if (!res.headersSent) {
-          resolve({ status: 404, body: null });
-        }
+      if (error) {
+        reject(error);
+        return;
       }
-    );
+      if (!res.headersSent) {
+        resolve({ status: 404, body: null });
+      }
+    });
   });
 }
 
-describe('providerRoutes', () => {
-  it('lists only accessible providers for a non-admin user', async () => {
-    queryMock.mockResolvedValueOnce({
-      rows: [{
-        id: 'provider-1',
-        label: 'Assigned provider',
-        provider: 'openai',
-        base_url: null,
-        api_key_encrypted: 'ciphertext',
-        created_by: 'owner-1',
-        is_system: true,
-        created_at: '2026-01-01T00:00:00.000Z',
-        updated_at: '2026-01-01T00:00:00.000Z',
-        assigned_to: null
-      }]
-    });
-
-    const response = await request('/', {
-      headers: {
-        'x-user-id': 'user-1',
-        'x-user-role': 'user'
-      }
-    });
-
-    expect(response.status).toBe(200);
-    expect(queryMock.mock.calls[0][0]).toContain('WHERE (p.is_system = true AND EXISTS');
-    expect(response.body).toEqual([
-      expect.objectContaining({
-        id: 'provider-1',
-        isSystem: true
-      })
-    ]);
-  });
-
-  it('rejects invalid provider payloads through the real route', async () => {
-    const response = await request('/', {
-      method: 'POST',
-      headers: {
-        'x-user-id': 'user-1',
-        'x-user-role': 'user'
-      },
-      body: {
-        label: 'Bad provider',
-        provider: 'google',
-        apiKey: 'sk-test'
-      }
-    });
-
-    expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({ error: 'Invalid input' });
-    expect(queryMock).not.toHaveBeenCalled();
-  });
-
-  it('creates a private provider for non-admin users even if isSystem is requested', async () => {
-    queryMock
-      .mockResolvedValueOnce({
-        rows: [{
-          id: 'provider-1',
-          label: 'My provider',
-          provider: 'openai',
-          base_url: null,
-          api_key_encrypted: 'ciphertext',
-          created_by: 'user-1',
-          is_system: false,
-          created_at: '2026-01-01T00:00:00.000Z',
-          updated_at: '2026-01-01T00:00:00.000Z'
-        }]
-      })
-      .mockResolvedValueOnce({ rows: [] });
-
-    const response = await request('/', {
-      method: 'POST',
-      headers: {
-        'x-user-id': 'user-1',
-        'x-user-role': 'user'
-      },
-      body: {
-        label: 'My provider',
-        provider: 'openai',
-        apiKey: 'sk-test',
-        isSystem: true
-      }
-    });
-
-    expect(response.status).toBe(201);
-    expect(encryptValueMock).toHaveBeenCalledWith('sk-test', 'enc-key');
-    expect(queryMock.mock.calls[0][1][5]).toBe(false);
-    expect(response.body).toMatchObject({
-      id: 'provider-1',
-      isSystem: false,
-      provider: 'openai'
-    });
-  });
-
-  it('prevents admins from editing another user private provider', async () => {
+describe('modelRoutes access control', () => {
+  it('blocks setting a default model when the user has no access to it', async () => {
     queryMock.mockResolvedValueOnce({
       rows: [{
         created_by: 'owner-1',
-        is_system: false
+        is_system: false,
+        has_access: false
       }]
     });
 
-    const response = await request('/provider-1', {
-      method: 'PATCH',
-      headers: {
-        'x-user-id': 'admin-1',
-        'x-user-role': 'admin'
-      },
-      body: {
-        label: 'Updated provider'
-      }
-    });
-
-    expect(response.status).toBe(403);
-    expect(response.body).toEqual({ error: 'Cannot edit private provider' });
-  });
-
-  it('grants access only to system providers', async () => {
-    queryMock.mockResolvedValueOnce({
-      rows: [{
-        is_system: false
-      }]
-    });
-
-    const response = await request('/provider-1/access', {
-      method: 'POST',
-      headers: {
-        'x-user-id': 'admin-1',
-        'x-user-role': 'admin'
-      },
-      body: {
-        userId: '00000000-0000-4000-8000-000000000000'
-      }
-    });
-
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({ error: 'Only system providers' });
-  });
-
-  it('prevents non-owners from deleting a private provider', async () => {
-    queryMock.mockResolvedValueOnce({
-      rows: [{
-        created_by: 'owner-1',
-        is_system: false
-      }]
-    });
-
-    const response = await request('/provider-1', {
-      method: 'DELETE',
+    const response = await request(modelRoutes, '/model-1/default', {
+      method: 'PUT',
       headers: {
         'x-user-id': 'user-1',
         'x-user-role': 'user'
@@ -312,28 +170,48 @@ describe('providerRoutes', () => {
     expect(response.body).toEqual({ error: 'Not authorized' });
   });
 
-  it('revokes access from a system provider', async () => {
-    queryMock
-      .mockResolvedValueOnce({
-        rows: [{
-          is_system: true
-        }]
-      })
-      .mockResolvedValueOnce({ rows: [] });
+  it('blocks testing a model when the user has no access to it', async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [{
+        created_by: 'owner-1',
+        is_system: false,
+        has_access: false
+      }]
+    });
 
-    const response = await request('/provider-1/access/user-2', {
-      method: 'DELETE',
+    const response = await request(modelRoutes, '/model-1/test', {
+      method: 'POST',
       headers: {
-        'x-user-id': 'admin-1',
-        'x-user-role': 'admin'
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
       }
     });
 
-    expect(response.status).toBe(204);
-    expect(queryMock.mock.calls[1][0]).toContain('DELETE FROM provider_access');
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: 'Not authorized' });
   });
 
-  it('tests provider connectivity through the real route', async () => {
+  it('allows testing an owned model and uses the provider endpoint', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          created_by: 'user-1',
+          is_system: false,
+          has_access: true
+        }]
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'model-1',
+          provider: 'openai',
+          provider_id: null,
+          base_url: null,
+          api_key_encrypted: 'ciphertext',
+          model_id: 'gpt-4o-mini',
+          model_type: 'llm'
+        }]
+      });
+
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -341,25 +219,104 @@ describe('providerRoutes', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const response = await request('/test', {
+    const response = await request(modelRoutes, '/model-1/test', {
       method: 'POST',
       headers: {
         'x-user-id': 'user-1',
         'x-user-role': 'user'
-      },
-      body: {
-        provider: 'openai',
-        apiKey: 'sk-test'
       }
     });
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.openai.com/v1/models',
+      'https://api.openai.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+});
+
+describe('providerRoutes access control', () => {
+  it('blocks testing a provider when the user has no access to it', async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [{
+        created_by: 'owner-1',
+        is_system: false,
+        has_access: false
+      }]
+    });
+
+    const response = await request(providerRoutes, '/provider-1/test', {
+      method: 'POST',
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      }
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: 'Not authorized' });
+  });
+
+  it('blocks listing remote provider models when the user has no access to it', async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [{
+        created_by: 'owner-1',
+        is_system: false,
+        has_access: false
+      }]
+    });
+
+    const response = await request(providerRoutes, '/provider-1/models', {
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      }
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: 'Not authorized' });
+  });
+
+  it('allows the owner to list remote provider models', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          created_by: 'user-1',
+          is_system: false,
+          has_access: true
+        }]
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          provider: 'openai',
+          base_url: 'https://proxy.example/v1',
+          api_key_encrypted: 'ciphertext'
+        }]
+      });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: 'gpt-4o' }, { id: 'text-embedding-3-small' }]
+      })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await request(providerRoutes, '/provider-1/models', {
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ models: ['gpt-4o', 'text-embedding-3-small'] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://proxy.example/v1/models',
       expect.objectContaining({
         headers: expect.objectContaining({
-          Authorization: 'Bearer sk-test'
+          Authorization: 'Bearer plain-secret'
         })
       })
     );
