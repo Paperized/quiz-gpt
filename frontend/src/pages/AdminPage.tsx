@@ -20,6 +20,7 @@ export function AdminPage() {
   const [createType, setCreateType] = useState<'llm' | 'embedding' | null>(null);
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [detailModel, setDetailModel] = useState<Model | null>(null);
+  const [showAccessModel, setShowAccessModel] = useState<Model | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
 
   // Providers state
@@ -28,6 +29,7 @@ export function AdminPage() {
   const [provError, setProvError] = useState('');
   const [showCreateProv, setShowCreateProv] = useState(false);
   const [editProv, setEditProv] = useState<Provider | null>(null);
+  const [detailProv, setDetailProv] = useState<Provider | null>(null);
   const [testStatus, setTestStatus] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
 
   const isAdmin = user?.role !== 'user';
@@ -97,16 +99,35 @@ export function AdminPage() {
     }
   }
 
+  async function handleGrantUser(modelId: string, userId: string) {
+    try { await req(`/api/models/${modelId}/access`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) }); await fetchModels(); }
+    catch (err) { alert(err instanceof Error ? err.message : 'Grant failed'); }
+  }
+
   async function handleGrant(modelId: string) {
     const userId = prompt('Enter user ID:');
     if (!userId) return;
-    try { await req(`/api/models/${modelId}/access`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) }); await fetchModels(); }
-    catch (err) { alert(err instanceof Error ? err.message : 'Grant failed'); }
+    await handleGrantUser(modelId, userId);
   }
 
   async function handleRevoke(modelId: string, userId: string) {
     try { await req(`/api/models/${modelId}/access/${userId}`, { method: 'DELETE' }); await fetchModels(); }
     catch (err) { alert(err instanceof Error ? err.message : 'Revoke failed'); }
+  }
+
+  // Wrappers that also update the AccessPanel model snapshot
+  function handleAccessGrant(userId: string) {
+    if (!showAccessModel) return;
+    const assigned = showAccessModel.assignedTo ?? [];
+    setShowAccessModel({ ...showAccessModel, assignedTo: [...assigned, userId] });
+    handleGrantUser(showAccessModel.id, userId);
+  }
+
+  function handleAccessRevoke(userId: string) {
+    if (!showAccessModel) return;
+    const assigned = (showAccessModel.assignedTo ?? []).filter((id) => id !== userId);
+    setShowAccessModel({ ...showAccessModel, assignedTo: assigned });
+    handleRevoke(showAccessModel.id, userId);
   }
 
   const systemModels = models.filter(m => m.isSystem);
@@ -185,7 +206,7 @@ export function AdminPage() {
                         ) : (
                           <button onClick={() => handleTestProvider(p)} className={`transition-colors p-1 ${testStatus[p.id] === 'ok' ? 'text-green-400' : testStatus[p.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
                         )}
-                        <button onClick={() => setEditProv(p)} className="text-text-muted hover:text-secondary transition-colors p-1"><Icon name="edit" size={14} /></button>
+                        <button onClick={() => setDetailProv(p)} className="text-text-muted hover:text-on-surface transition-colors p-1"><Icon name="search" size={14} /></button>
                         <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
                       </div>
                     </div>
@@ -206,8 +227,8 @@ export function AdminPage() {
               </div>
               {modelsError && <div className="bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{modelsError}</div>}
               {modelsLoading ? <div className="flex items-center justify-center h-64"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div> : (<>
-                {systemModels.length > 0 && <div className="space-y-2">{systemModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} onTest={handleTestModel} testStatus={testStatus[m.id]} />)}</div>}
-                <div className="space-y-2">{userModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} onTest={handleTestModel} testStatus={testStatus[m.id]} />)}{userModels.length === 0 && systemModels.length === 0 && <p className="text-[13px] text-text-muted italic">No models yet.</p>}</div>
+                {systemModels.length > 0 && <div className="space-y-2">{systemModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} onTest={handleTestModel} onAccess={setShowAccessModel} testStatus={testStatus[m.id]} />)}</div>}
+                <div className="space-y-2">{userModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} onTest={handleTestModel} onAccess={setShowAccessModel} testStatus={testStatus[m.id]} />)}{userModels.length === 0 && systemModels.length === 0 && <p className="text-[13px] text-text-muted italic">No models yet.</p>}</div>
               </>)}
             </>
           )}
@@ -219,15 +240,43 @@ export function AdminPage() {
       {detailModel && <ModelDetail model={detailModel} onClose={() => setDetailModel(null)} onEdit={() => { setDetailModel(null); setEditModel(detailModel); }} />}
       {showCreateProv && <ProviderForm onClose={() => setShowCreateProv(false)} onSaved={() => { fetchProviders(); setShowCreateProv(false); }} />}
       {editProv && <ProviderForm edit={editProv} onClose={() => setEditProv(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editProv.id]; return ns; }); fetchProviders(); setEditProv(null); }} />}
+      {detailProv && <ProviderDetail provider={detailProv} onClose={() => setDetailProv(null)} onEdit={() => { setDetailProv(null); setEditProv(detailProv); }} />}
+      {showAccessModel && <AccessPanel model={showAccessModel} users={users} onClose={() => setShowAccessModel(null)} onGrant={handleAccessGrant} onRevoke={handleAccessRevoke} />}
+      {showCreateUser && <CreateUserForm onClose={() => setShowCreateUser(false)} onCreated={() => { fetchUsers(); setShowCreateUser(false); }} />}
     </>
   );
 }
 
-function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, onGrant, onRevoke, onTest, testStatus }: {
+function ProviderDetail({ provider, onClose, onEdit }: { provider: Provider; onClose: () => void; onEdit: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-[16px] font-bold text-on-surface">{provider.label}</h3>
+          <button onClick={onClose} className="text-text-muted hover:text-on-surface"><Icon name="close" size={18} /></button>
+        </div>
+        <div className="space-y-3 text-[13px]">
+          <div><span className="text-text-muted">Provider: </span><span className="text-on-surface">{provider.provider}</span></div>
+          <div><span className="text-text-muted">API Key: </span><span className="text-on-surface">{provider.apiKeyMasked}</span></div>
+          {provider.baseUrl && <div><span className="text-text-muted">Base URL: </span><span className="text-on-surface">{provider.baseUrl}</span></div>}
+          {provider.isSystem && <div><span className="text-text-muted">System provider</span></div>}
+          <div><span className="text-text-muted">Created: </span><span className="text-on-surface">{new Date(provider.createdAt).toLocaleString()}</span></div>
+          {provider.updatedAt && <div><span className="text-text-muted">Updated: </span><span className="text-on-surface">{new Date(provider.updatedAt).toLocaleString()}</span></div>}
+        </div>
+        <div className="flex gap-2 mt-6">
+          <button onClick={onEdit} className="flex-1 py-2 rounded-lg border border-border-subtle text-[13px] font-medium text-text-muted hover:border-secondary hover:text-secondary transition-colors">Edit</button>
+          <button onClick={onClose} className="flex-1 py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, onGrant, onRevoke, onTest, onAccess, testStatus }: {
   model: Model; isAdmin: boolean; onDelete: (m: Model) => void; onSetDefault: (m: Model) => void;
   onDetail: (m: Model) => void; onEdit: (m: Model) => void;
   onGrant: (id: string) => void; onRevoke: (id: string, userId: string) => void;
-  onTest: (m: Model) => void; testStatus?: 'loading' | 'ok' | 'error';
+  onTest: (m: Model) => void; onAccess?: (m: Model) => void; testStatus?: 'loading' | 'ok' | 'error';
 }) {
   return (
     <div className="bg-surface-container rounded-lg border border-border-subtle p-4 flex items-center justify-between">
@@ -248,8 +297,68 @@ function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, o
         )}
         <button onClick={() => onSetDefault(model)} className="text-text-muted hover:text-yellow-400 transition-colors p-1" title="Set as default"><Icon name="star" size={14} fill={model.isDefault} className={model.isDefault ? 'text-yellow-400' : ''} /></button>
         <button onClick={() => onDetail(model)} className="text-text-muted hover:text-on-surface transition-colors p-1" title="View details"><Icon name="search" size={14} /></button>
-        <button onClick={() => onEdit(model)} className="text-text-muted hover:text-secondary transition-colors p-1" title="Edit"><Icon name="edit" size={14} /></button>
+        {model.isSystem && isAdmin && <button onClick={() => onAccess?.(model)} className="text-text-muted hover:text-primary transition-colors p-1" title="Access"><Icon name="group" size={14} /></button>}
         <button onClick={() => onDelete(model)} className="text-text-muted hover:text-error transition-colors p-1" title="Delete"><Icon name="delete" size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
+function AccessPanel({ model, users, onClose, onGrant, onRevoke }: { model: Model; users: AuthUser[]; onClose: () => void; onGrant: (userId: string) => void; onRevoke: (userId: string) => void }) {
+  const assignedIds = model.assignedTo ?? [];
+  const plainUsers = users.filter((u) => u.role === 'user');
+  const assigned = plainUsers.filter((u) => assignedIds.includes(u.id));
+  const unassigned = plainUsers.filter((u) => !assignedIds.includes(u.id));
+  const [grantUserId, setGrantUserId] = useState('');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-[16px] font-bold text-on-surface">Access</h3>
+            <p className="text-[12px] text-text-muted truncate max-w-[240px]">{model.label}</p>
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-on-surface"><Icon name="close" size={18} /></button>
+        </div>
+
+        {assigned.length > 0 && (
+          <div className="space-y-1.5 mb-3">
+            <h4 className="text-[11px] font-bold text-text-muted uppercase tracking-[0.1em]">Granted</h4>
+            {assigned.map((u) => (
+              <div key={u.id} className="flex items-center justify-between bg-surface rounded-lg px-3 py-1.5">
+                <div className="min-w-0">
+                  {u.name && <span className="text-on-surface truncate text-[13px] block">{u.name}</span>}
+                  <span className="text-text-muted text-[11px]">{u.email}</span>
+                </div>
+                <button onClick={() => onRevoke(u.id)} className="text-text-muted hover:text-error transition-colors p-0.5 shrink-0 ml-2"><Icon name="close" size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {assigned.length === 0 && (
+          <p className="text-[12px] text-text-muted italic mb-3">No users granted. Admins have implicit access.</p>
+        )}
+
+        {unassigned.length > 0 && (
+          <div className="border-t border-border-subtle pt-3">
+            <label className="text-[11px] font-bold text-text-muted uppercase tracking-[0.1em] block mb-2">Grant to user</label>
+            <div className="flex items-center gap-1.5">
+              <select value={grantUserId} onChange={e => setGrantUserId(e.target.value)} className="flex-1 px-2 py-1.5 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
+                <option value="">Select user...</option>
+                {unassigned.map((u) => (
+                  <option key={u.id} value={u.id}>{u.name || u.email}</option>
+                ))}
+              </select>
+              <button onClick={() => { if (grantUserId) { onGrant(grantUserId); setGrantUserId(''); } }} disabled={!grantUserId} className="py-1.5 px-3 rounded-lg bg-primary text-on-primary text-[12px] font-medium hover:opacity-90 disabled:opacity-40 transition-opacity">
+                Grant
+              </button>
+            </div>
+          </div>
+        )}
+
+        <button onClick={onClose} className="mt-4 w-full py-2 rounded-lg border border-border-subtle text-[13px] font-medium text-text-muted hover:border-secondary hover:text-secondary transition-colors">Close</button>
       </div>
     </div>
   );
@@ -258,12 +367,12 @@ function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, o
 function ModelDetail({ model, onClose, onEdit }: { model: Model; onClose: () => void; onEdit: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-md">
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between mb-4 shrink-0">
           <h3 className="text-[16px] font-bold text-on-surface">{model.label}</h3>
           <button onClick={onClose} className="text-text-muted hover:text-on-surface"><Icon name="close" size={18} /></button>
         </div>
-        <div className="space-y-3 text-[13px]">
+        <div className="space-y-3 text-[13px] flex-1 overflow-y-auto">
           <div><span className="text-text-muted">Type: </span><span className="text-on-surface">{model.modelType}</span></div>
           <div><span className="text-text-muted">Provider: </span><span className="text-on-surface">{model.provider}</span></div>
           <div><span className="text-text-muted">Model ID: </span><span className="text-on-surface">{model.modelId}</span></div>
@@ -282,7 +391,7 @@ function ModelDetail({ model, onClose, onEdit }: { model: Model; onClose: () => 
           {model.isSystem && <div><span className="text-text-muted">System model</span></div>}
           {model.isDefault && <div><span className="text-green-400">Default model</span></div>}
         </div>
-        <div className="flex gap-2 mt-6">
+        <div className="flex gap-2 mt-4 shrink-0">
           <button onClick={onEdit} className="flex-1 py-2 rounded-lg border border-border-subtle text-[13px] font-medium text-text-muted hover:border-secondary hover:text-secondary transition-colors">Edit</button>
           <button onClick={onClose} className="flex-1 py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity">Close</button>
         </div>
@@ -313,6 +422,15 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
   const [loadingModels, setLoadingModels] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // On edit mount with providerId, fetch provider models
+  const [initialModelsFetched, setInitialModelsFetched] = useState(false);
+  useEffect(() => {
+    if (edit?.providerId && !initialModelsFetched) {
+      setInitialModelsFetched(true);
+      fetchProviderModels(edit.providerId);
+    }
+  }, [edit?.providerId, initialModelsFetched]);
 
   async function fetchProviderModels(provId: string) {
     setLoadingModels(true); setProviderModels([]);
@@ -376,7 +494,7 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
         if (maxChars) body.maxRetrievedChars = Number(maxChars);
         if (batchSize) body.embeddingBatchSize = Number(batchSize);
       }
-      if (!edit) body.isSystem = isSystem;
+      body.isSystem = isSystem;
       if (edit) {
         await req(`/api/models/${edit.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       } else {
@@ -438,7 +556,7 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
             <input type="password" placeholder={edit ? 'New API Key (leave empty to keep)' : 'API Key'} value={apiKey} onChange={e => setApiKey(e.target.value)} required={!edit} autoComplete="off" data-form-type="other" className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
             </>)}
 
-            {!edit && <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System model</label>}
+            <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System model</label>
 
             <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="flex items-center gap-1.5 text-[12px] text-text-muted hover:text-secondary transition-colors">
               <Icon name={showAdvanced ? 'expand_more' : 'chevron_right'} size={16} />Advanced
@@ -505,8 +623,7 @@ function ProviderForm({ edit, onClose, onSaved }: { edit?: Provider; onClose: ()
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(''); setSubmitting(true);
     try {
-      const body: Record<string, unknown> = { label, provider, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined };
-      if (!edit) body.isSystem = isSystem;
+      const body: Record<string, unknown> = { label, provider, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined, isSystem };
       if (edit) {
         await req(`/api/providers/${edit.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       } else {
@@ -537,7 +654,7 @@ function ProviderForm({ edit, onClose, onSaved }: { edit?: Provider; onClose: ()
             </select>
             <input type="text" placeholder="Base URL (optional)" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
             <input type="password" placeholder={edit ? 'New API Key (leave empty to keep)' : 'API Key'} value={apiKey} onChange={e => setApiKey(e.target.value)} required={!edit} autoComplete="off" data-form-type="other" className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
-            {!edit && <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System provider</label>}
+            <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System provider</label>
             {error && <p className="text-error text-[12px]">{error}</p>}
           </div>
           {testResult && (

@@ -88,6 +88,7 @@ authRoutes.post('/register', async (req, res) => {
       name: user.name,
       role: updated[0].role,
       authProvider: 'email',
+      encryptionConfigured: Boolean(config.SETTINGS_ENCRYPTION_KEY),
     });
   } catch (err) {
     logger.error('auth_register', err);
@@ -133,6 +134,7 @@ authRoutes.post('/login', async (req, res) => {
       name: user.name,
       role: user.role,
       authProvider: 'email',
+      encryptionConfigured: Boolean(config.SETTINGS_ENCRYPTION_KEY),
     });
   } catch (err) {
     logger.error('auth_login', err);

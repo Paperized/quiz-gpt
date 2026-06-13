@@ -20,6 +20,7 @@ export function ModelsPage() {
   const [createType, setCreateType] = useState<'llm' | 'embedding' | null>(null);
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [detailModel, setDetailModel] = useState<Model | null>(null);
+  const [detailProv, setDetailProv] = useState<Provider | null>(null);
   const [testStatus, setTestStatus] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
 
   const isAdmin = user?.role !== 'user';
@@ -103,7 +104,8 @@ export function ModelsPage() {
                       ) : (
                         <button onClick={() => handleTestProvider(p)} className={`transition-colors p-1 ${testStatus[p.id] === 'ok' ? 'text-green-400' : testStatus[p.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
                       )}
-                      <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
+                      <button onClick={() => setDetailProv(p)} className="text-text-muted hover:text-on-surface transition-colors p-1"><Icon name="search" size={14} /></button>
+                      {!p.isSystem && <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>}
                     </div>
                   </div>
                 ))}
@@ -126,7 +128,7 @@ export function ModelsPage() {
                 <div className="space-y-2">
                   {models.map(m => (
                     <div key={m.id} className="bg-surface-container rounded-lg border border-border-subtle p-4 flex items-center justify-between">
-                      <div className="min-w-0"><div className="flex items-center gap-2"><span className="text-[13px] font-medium text-on-surface truncate">{m.label}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${m.modelType === 'llm' ? 'bg-primary/10 text-primary' : 'bg-amber-500/15 text-amber-400'}`}>{m.modelType}</span>{m.isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 font-medium shrink-0">DEFAULT</span>}</div><div className="text-[11px] text-text-muted mt-0.5">{m.provider} · {m.modelId} · Key: {m.apiKeyMasked}</div></div>
+                      <div className="min-w-0"><div className="flex items-center gap-2"><span className="text-[13px] font-medium text-on-surface truncate">{m.label}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${m.modelType === 'llm' ? 'bg-primary/10 text-primary' : 'bg-amber-500/15 text-amber-400'}`}>{m.modelType}</span>{m.isSystem && <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/10 text-secondary font-medium shrink-0">SYSTEM</span>}{m.isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 font-medium shrink-0">DEFAULT</span>}</div><div className="text-[11px] text-text-muted mt-0.5">{m.provider} · {m.modelId} · Key: {m.apiKeyMasked}</div></div>
                       <div className="flex items-center gap-1 shrink-0 ml-4">
                         {testStatus[m.id] === 'loading' ? (
                           <span className="p-1"><svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg></span>
@@ -134,7 +136,8 @@ export function ModelsPage() {
                           <button onClick={() => handleTestModel(m)} className={`transition-colors p-1 ${testStatus[m.id] === 'ok' ? 'text-green-400' : testStatus[m.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
                         )}
                         <button onClick={() => handleSetDefault(m)} className={`text-text-muted hover:text-yellow-400 transition-colors p-1 ${m.isDefault ? 'text-yellow-400' : ''}`}><Icon name="star" size={14} fill={m.isDefault} /></button>
-                        <button onClick={() => handleDeleteModel(m)} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
+                        <button onClick={() => setDetailModel(m)} className="text-text-muted hover:text-on-surface transition-colors p-1"><Icon name="search" size={14} /></button>
+                        {!m.isSystem && <button onClick={() => handleDeleteModel(m)} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>}
                       </div>
                     </div>
                   ))}
@@ -147,7 +150,8 @@ export function ModelsPage() {
 
       {createType && <ModelFormSimple modelType={createType} providers={providers} onClose={() => setCreateType(null)} onSaved={() => { fetchModels(); setCreateType(null); }} />}
       {editModel && <ModelFormSimple modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editModel.id]; return ns; }); fetchModels(); setEditModel(null); }} />}
-      {detailModel && <ModelDetailSimple model={detailModel} onClose={() => setDetailModel(null)} />}
+      {detailModel && <ModelDetailSimple model={detailModel} onClose={() => setDetailModel(null)} onEdit={detailModel.isSystem ? undefined : () => { setDetailModel(null); setEditModel(detailModel); }} />}
+      {detailProv && <ProviderDetailSimple provider={detailProv} onClose={() => setDetailProv(null)} />}
     </>
   );
 }
@@ -166,6 +170,15 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
   const [loadingModels, setLoadingModels] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // On edit mount with providerId, fetch provider models
+  const [initialModelsFetched, setInitialModelsFetched] = useState(false);
+  useEffect(() => {
+    if (edit?.providerId && !initialModelsFetched) {
+      setInitialModelsFetched(true);
+      fetchProviderModels(edit.providerId);
+    }
+  }, [edit?.providerId, initialModelsFetched]);
 
   async function fetchProviderModels(provId: string) {
     setLoadingModels(true); setProviderModels([]);
@@ -283,7 +296,27 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
   );
 }
 
-function ModelDetailSimple({ model, onClose }: { model: Model; onClose: () => void }) {
+function ProviderDetailSimple({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-[16px] font-bold text-on-surface">{provider.label}</h3>
+          <button onClick={onClose} className="text-text-muted hover:text-on-surface"><Icon name="close" size={18} /></button>
+        </div>
+        <div className="space-y-3 text-[13px]">
+          <div><span className="text-text-muted">Provider: </span><span className="text-on-surface">{provider.provider}</span></div>
+          <div><span className="text-text-muted">API Key: </span><span className="text-on-surface">{provider.apiKeyMasked}</span></div>
+          {provider.baseUrl && <div><span className="text-text-muted">Base URL: </span><span className="text-on-surface">{provider.baseUrl}</span></div>}
+          {provider.isSystem && <div><span className="text-text-muted">System provider</span></div>}
+        </div>
+        <button onClick={onClose} className="mt-6 w-full py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity">Close</button>
+      </div>
+    </div>
+  );
+}
+
+function ModelDetailSimple({ model, onClose, onEdit }: { model: Model; onClose: () => void; onEdit?: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-md">
@@ -296,7 +329,10 @@ function ModelDetailSimple({ model, onClose }: { model: Model; onClose: () => vo
           {model.baseUrl && <div><span className="text-text-muted">Base URL: </span>{model.baseUrl}</div>}
           {model.isDefault && <div className="text-green-400">Default model</div>}
         </div>
-        <button onClick={onClose} className="mt-6 w-full py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity">Close</button>
+        <div className="flex gap-2 mt-6">
+          {onEdit && <button onClick={onEdit} className="flex-1 py-2 rounded-lg border border-border-subtle text-[13px] font-medium text-text-muted hover:border-secondary hover:text-secondary transition-colors">Edit</button>}
+          <button onClick={onClose} className={`${onEdit ? 'flex-1' : 'w-full'} py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity`}>Close</button>
+        </div>
       </div>
     </div>
   );

@@ -38,6 +38,7 @@ const modelUpdateSchema = z.object({
   maxRetrievedChars: z.coerce.number().int().positive().optional().nullable(),
   maxEmbeddingCandidates: z.coerce.number().int().positive().optional().nullable(),
   embeddingBatchSize: z.coerce.number().int().positive().optional().nullable(),
+  isSystem: z.boolean().optional(),
 });
 
 const modelAccessSchema = z.object({
@@ -249,6 +250,7 @@ modelRoutes.patch('/:id', async (req, res) => {
     if (body.data.maxRetrievedChars !== undefined) set('max_retrieved_chars', body.data.maxRetrievedChars);
     if (body.data.maxEmbeddingCandidates !== undefined) set('max_embedding_candidates', body.data.maxEmbeddingCandidates);
     if (body.data.embeddingBatchSize !== undefined) set('embedding_batch_size', body.data.embeddingBatchSize);
+    if (body.data.isSystem !== undefined && adm) set('is_system', body.data.isSystem);
     if (body.data.apiKey !== undefined) {
       const encryptionKey = config.SETTINGS_ENCRYPTION_KEY;
       if (!encryptionKey) {

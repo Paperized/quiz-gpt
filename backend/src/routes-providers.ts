@@ -22,6 +22,7 @@ const providerUpdateSchema = z.object({
   provider: z.enum(['openai', 'anthropic', 'openai_compatible']).optional(),
   apiKey: z.string().min(1).max(1024).optional(),
   baseUrl: z.string().max(1024).optional(),
+  isSystem: z.boolean().optional(),
 });
 
 const accessSchema = z.object({ userId: z.string().uuid() });
@@ -101,6 +102,9 @@ providerRoutes.patch('/:id', async (req, res) => {
     if (body.data.apiKey !== undefined) {
       const key = config.SETTINGS_ENCRYPTION_KEY; if (!key) { res.status(500).json({ error: 'Encryption not configured' }); return; }
       updates.push(`api_key_encrypted = $${i++}`); vals.push(encryptValue(body.data.apiKey, key));
+    }
+    if (body.data.isSystem !== undefined && adm) {
+      updates.push(`is_system = $${i++}`); vals.push(body.data.isSystem as unknown as string);
     }
     if (updates.length === 0) { res.status(400).json({ error: 'No fields' }); return; }
     updates.push('updated_at = now()'); vals.push(id);

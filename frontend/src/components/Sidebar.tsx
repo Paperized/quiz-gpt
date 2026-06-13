@@ -554,7 +554,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${location.pathname === '/profile' ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
           >
             <Icon name="person" size={18} className={location.pathname === '/profile' ? 'text-secondary' : ''} />
-            <span className="text-[12px]">Profile</span>
+            <span className="text-[12px]">Profile{user?.name ? ` (${user.name})` : ''}</span>
           </button>
           {(user?.role === 'admin' || user?.role === 'super_admin') ? (
             <button

@@ -288,6 +288,18 @@ function parseJsonField<T>(value: unknown, fieldName: string): T | { error: stri
   }
 }
 
+function checkResourceOwner(req: Request, res: Response, createdBy: string | null): boolean {
+  if (isAdminUser(req)) return true;
+  if (createdBy === req.user?.id) return true;
+  res.status(403).json({ error: 'Not authorized' });
+  return false;
+}
+
+function userOwnershipClause(req: Request, params: unknown[], column = 'created_by'): string {
+  params.push(req.user!.id);
+  return ` AND ${column} = $${params.length}`;
+}
+
 function mapQuizRow(row: {
   id: string;
   title: string;
@@ -401,10 +413,10 @@ async function createQuizFromGenerationRequest(
   onProgress?.({ currentStep: 'Saving result', stepIndex: 6, message: null });
   const id = randomUUID();
   const result = await pool.query(`
-    INSERT INTO quizzes(id, title, topic, settings, questions)
-    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+    INSERT INTO quizzes(id, title, topic, settings, questions, created_by)
+    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
     RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
-  `, [id, llm.title, parsed.topic, JSON.stringify(parsed.settings), JSON.stringify(llm.questions)]);
+  `, [id, llm.title, parsed.topic, JSON.stringify(parsed.settings), JSON.stringify(llm.questions), userId]);
   const q = result.rows[0];
   return { ...mapQuizRow(q), contextUsed: llm.contextUsed };
 }
@@ -947,22 +959,12 @@ app.post('/api/jobs/groups/:id/regenerate', authRequired, generateLimiter, async
 }));
 
 app.get('/api/quizzes', authRequired, asyncRoute(async (req, res) => {
-  const isAdmin = req.user?.role === 'admin';
   const { rows } = await pool.query(
-    isAdmin
-      ? `
-        SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id, created_by
-        FROM quizzes
-        WHERE deleted_at IS NULL
-        ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC
-      `
-      : `
-        SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id, created_by
-        FROM quizzes
-        WHERE deleted_at IS NULL AND (created_by = $1 OR created_by IS NULL)
-        ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC
-      `,
-    isAdmin ? [] : [req.user!.id]
+    `SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id, created_by
+     FROM quizzes
+      WHERE deleted_at IS NULL AND created_by = $1
+     ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC`,
+    [req.user!.id]
   );
   res.json(rows.map((r: Record<string, unknown>) => ({
     id: r.id,
@@ -1237,9 +1239,10 @@ app.patch('/api/quizzes/:id', authRequired, asyncRoute(async (req, res) => {
     }
   }
   params.push(id);
+  const ownership = userOwnershipClause(req, params);
   const { rows } = await pool.query(`
     UPDATE quizzes SET ${updates.join(', ')}
-    WHERE id = $${params.length} AND deleted_at IS NULL
+    WHERE id = $${params.length} AND deleted_at IS NULL${ownership}
     RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
   `, params);
   if (!rows[0]) {
@@ -1268,9 +1271,11 @@ app.patch('/api/quizzes/:id', authRequired, asyncRoute(async (req, res) => {
 }));
 
 app.delete('/api/quizzes/:id', authRequired, asyncRoute(async (req, res) => {
+  const params: unknown[] = [req.params.id];
+  const ownership = userOwnershipClause(req, params);
   const { rowCount } = await pool.query(
-    'UPDATE quizzes SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
-    [req.params.id]
+    `UPDATE quizzes SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL${ownership}`,
+    params
   );
   if (!rowCount) {
     return res.status(404).json({ error: 'Quiz not found' });
@@ -1287,9 +1292,11 @@ app.post('/api/quizzes/:id/regenerate', authRequired, generateLimiter, asyncRout
   }
   const { settings: newSettings, prompt, mode } = parsed.data;
 
+  const params: unknown[] = [id];
+  const ownership = userOwnershipClause(req, params);
   const { rows } = await pool.query(
-    'SELECT id, title, topic, settings, questions, group_id FROM quizzes WHERE id = $1 AND deleted_at IS NULL',
-    [id]
+    `SELECT id, title, topic, settings, questions, group_id FROM quizzes WHERE id = $1 AND deleted_at IS NULL${ownership}`,
+    params
   );
   if (!rows[0]) {
     return res.status(404).json({ error: 'Quiz not found' });
@@ -1340,12 +1347,9 @@ app.post('/api/quizzes/:id/regenerate', authRequired, generateLimiter, asyncRout
 }));
 
 app.get('/api/groups', authRequired, asyncRoute(async (req, res) => {
-  const isAdmin = req.user?.role === 'admin';
   const { rows } = await pool.query(
-    isAdmin
-      ? 'SELECT id, name, position, created_at FROM quiz_groups ORDER BY position ASC, created_at ASC'
-      : 'SELECT id, name, position, created_at FROM quiz_groups WHERE created_by = $1 OR created_by IS NULL ORDER BY position ASC, created_at ASC',
-    isAdmin ? [] : [req.user!.id]
+    'SELECT id, name, position, created_at FROM quiz_groups WHERE created_by = $1 ORDER BY position ASC, created_at ASC',
+    [req.user!.id]
   );
   res.json(rows.map((r: Record<string, unknown>) => ({
     id: r.id,
@@ -1391,8 +1395,9 @@ app.patch('/api/groups/:id', authRequired, asyncRoute(async (req, res) => {
     updates.push(`position = $${params.length}`);
   }
   params.push(req.params.id);
+  const ownership = userOwnershipClause(req, params);
   const { rows } = await pool.query(
-    `UPDATE quiz_groups SET ${updates.join(', ')} WHERE id = $${params.length} RETURNING id, name, position, created_at`,
+    `UPDATE quiz_groups SET ${updates.join(', ')} WHERE id = $${params.length}${ownership} RETURNING id, name, position, created_at`,
     params
   );
   if (!rows[0]) return res.status(404).json({ error: 'Group not found' });
@@ -1404,12 +1409,17 @@ app.patch('/api/groups/:id', authRequired, asyncRoute(async (req, res) => {
 app.delete('/api/groups/:id', authRequired, asyncRoute(async (req, res) => {
   const client = await pool.connect();
   try {
+    const params: unknown[] = [req.params.id];
+    const ownership = userOwnershipClause(req, params);
     await client.query('BEGIN');
     const { rowCount: deletedQuizzes } = await client.query(
-      'UPDATE quizzes SET deleted_at = NOW() WHERE group_id = $1 AND deleted_at IS NULL',
-      [req.params.id]
+      `UPDATE quizzes SET deleted_at = NOW() WHERE group_id = $1 AND deleted_at IS NULL${ownership}`,
+      params
     );
-    const { rowCount } = await client.query('DELETE FROM quiz_groups WHERE id = $1', [req.params.id]);
+    const { rowCount } = await client.query(
+      `DELETE FROM quiz_groups WHERE id = $1${ownership}`,
+      params
+    );
     if (!rowCount) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Group not found' });
@@ -1436,7 +1446,12 @@ app.post('/api/groups/:id/regenerate', authRequired, generateLimiter, asyncRoute
     return res.status(400).json({ error: 'settings is required for group regeneration' });
   }
 
-  const group = await pool.query('SELECT id, name FROM quiz_groups WHERE id = $1', [groupId]);
+  const gParams: unknown[] = [groupId];
+  const gOwnership = userOwnershipClause(req, gParams);
+  const group = await pool.query(
+    `SELECT id, name FROM quiz_groups WHERE id = $1${gOwnership}`,
+    gParams
+  );
   if (!group.rows[0]) return res.status(404).json({ error: 'Group not found' });
 
   const { rows: quizzes } = await pool.query(
@@ -1596,13 +1611,15 @@ app.post('/api/attempts', authRequired, asyncRoute(async (req, res) => {
 
 app.get('/api/attempts/:id', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
+  const aParams: unknown[] = [id];
+  const aOwnership = userOwnershipClause(req, aParams, 'a.created_by');
   const { rows } = await pool.query(`
     SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at, a.evaluations,
            q.title, q.topic, q.settings, q.questions, q.pinned, q.deleted_at
     FROM attempts a
     JOIN quizzes q ON q.id = a.quiz_id
-    WHERE a.id = $1
-  `, [id]);
+    WHERE a.id = $1${aOwnership}
+  `, aParams);
   if (!rows.length) return res.status(404).json({ error: 'Attempt not found' });
   const r = rows[0];
   const questions = r.questions as QuizQuestion[];
@@ -1636,15 +1653,12 @@ app.get('/api/results/history', authRequired, asyncRoute(async (req, res) => {
   const quizName = (req.query.quizName as string | undefined)?.trim().toLowerCase();
   const from = req.query.from as string | undefined;
   const to = req.query.to as string | undefined;
-  const isAdmin = req.user?.role === 'admin';
 
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  if (!isAdmin) {
-    params.push(req.user!.id);
-    conditions.push(`(a.created_by = $${params.length} OR a.created_by IS NULL)`);
-  }
+  params.push(req.user!.id);
+  conditions.push(`a.created_by = $${params.length}`);
   if (quizName) {
     params.push(`%${quizName}%`);
     conditions.push(`LOWER(q.title) LIKE $${params.length}`);
@@ -1684,19 +1698,15 @@ app.get('/api/results/history', authRequired, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/results/metrics', authRequired, asyncRoute(async (req, res) => {
-  const isAdmin = req.user?.role === 'admin';
+  const userId = req.user!.id;
   const [quizzes, attempts] = await Promise.all([
     pool.query(
-      isAdmin
-        ? 'SELECT id, title FROM quizzes'
-        : 'SELECT id, title FROM quizzes WHERE created_by = $1 OR created_by IS NULL',
-      isAdmin ? [] : [req.user!.id]
+      'SELECT id, title FROM quizzes WHERE created_by = $1',
+      [userId]
     ),
     pool.query(
-      isAdmin
-        ? 'SELECT quiz_id, score, total, completed_at FROM attempts ORDER BY completed_at ASC'
-        : 'SELECT quiz_id, score, total, completed_at FROM attempts WHERE created_by = $1 OR created_by IS NULL ORDER BY completed_at ASC',
-      isAdmin ? [] : [req.user!.id]
+      'SELECT quiz_id, score, total, completed_at FROM attempts WHERE created_by = $1 ORDER BY completed_at ASC',
+      [userId]
     )
   ]);
 
@@ -1755,7 +1765,10 @@ const guestAttemptSchema = z.object({
 
 app.post('/api/quizzes/:id/shares', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
-  const quiz = await pool.query('SELECT id FROM quizzes WHERE id = $1', [id]);
+  const quiz = await pool.query(
+    'SELECT id FROM quizzes WHERE id = $1 AND created_by = $2',
+    [id, req.user!.id]
+  );
   if (!quiz.rows[0]) return res.status(404).json({ error: 'Quiz not found' });
 
   const parsed = createShareSchema.safeParse(req.body);
@@ -1782,15 +1795,19 @@ app.post('/api/quizzes/:id/shares', authRequired, asyncRoute(async (req, res) =>
 
 app.get('/api/quizzes/:id/shares', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
+  // Scope by quiz ownership for non-admins
+  const sParams: unknown[] = [id];
+  const sOwnership = userOwnershipClause(req, sParams, 'q.created_by');
   const { rows } = await pool.query(`
     SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
            COUNT(a.id)::int AS attempt_count
     FROM quiz_shares s
+    JOIN quizzes q ON q.id = s.quiz_id
     LEFT JOIN attempts a ON a.share_id = s.id
-    WHERE s.quiz_id = $1
+    WHERE s.quiz_id = $1${sOwnership}
     GROUP BY s.id
     ORDER BY s.created_at DESC
-  `, [id]);
+  `, sParams);
   return res.json(rows.map((s) => ({
     id: s.id, quizId: s.quiz_id, token: s.token,
     guestName: s.guest_name, maxAttempts: s.max_attempts,
@@ -1798,7 +1815,9 @@ app.get('/api/quizzes/:id/shares', authRequired, asyncRoute(async (req, res) => 
   })));
 }));
 
-app.get('/api/shares', authRequired, asyncRoute(async (_req, res) => {
+app.get('/api/shares', authRequired, asyncRoute(async (req, res) => {
+  const sParams: unknown[] = [];
+  sParams.push(req.user!.id);
   const { rows } = await pool.query(`
     SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
            q.title AS quiz_title, q.deleted_at AS quiz_deleted_at,
@@ -1806,9 +1825,10 @@ app.get('/api/shares', authRequired, asyncRoute(async (_req, res) => {
     FROM quiz_shares s
     JOIN quizzes q ON q.id = s.quiz_id
     LEFT JOIN attempts a ON a.share_id = s.id
-    GROUP BY s.id, q.title, q.deleted_at
+    WHERE q.created_by = $1
+    GROUP BY s.id, q.title, q.deleted_at, q.created_by
     ORDER BY s.created_at DESC
-  `);
+  `, sParams);
   return res.json(rows.map((s) => ({
     id: s.id, quizId: s.quiz_id, quizTitle: s.quiz_title, token: s.token,
     guestName: s.guest_name, maxAttempts: s.max_attempts,
@@ -1818,7 +1838,11 @@ app.get('/api/shares', authRequired, asyncRoute(async (_req, res) => {
 }));
 
 app.delete('/api/shares/:shareId', authRequired, asyncRoute(async (req, res) => {
-  const { rowCount } = await pool.query('DELETE FROM quiz_shares WHERE id = $1', [req.params.shareId]);
+  const sParams: unknown[] = [req.params.shareId, req.user!.id];
+  const { rowCount } = await pool.query(
+    `DELETE FROM quiz_shares s USING quizzes q WHERE s.quiz_id = q.id AND s.id = $1 AND q.created_by = $2`,
+    sParams
+  );
   if (!rowCount) return res.status(404).json({ error: 'Share not found' });
   logger.info('share_deleted', { shareId: req.params.shareId });
   return res.status(204).send();
