@@ -1,6 +1,21 @@
 # QuizGPT
 
-QuizGPT is a self-hostable full-stack web app that generates quizzes from natural language prompts. Quizzes and attempts are persisted in PostgreSQL, and quizzes can be retaken without re-calling the LLM. The app supports source-grounded generation from uploaded documents and GitHub repositories.
+QuizGPT is a self-hostable multi-user full-stack web app that generates quizzes from natural language prompts. Quizzes and attempts are persisted in PostgreSQL, quizzes can be retaken without re-calling the LLM, and the app supports source-grounded generation from uploaded documents and GitHub repositories.
+
+It is designed for authenticated teams, not only for a single local operator.
+The current app includes:
+
+- email/password auth and optional OIDC/SSO auth
+- roles: `super_admin`, `admin`, `user`
+- multi-user administration
+- system and private providers/models with per-user access assignment
+- quiz groups, regenerate flows, guest share links, review/results screens, admin and profile pages
+
+In practice:
+
+- users can create and manage their own quizzes and private resources
+- admins can manage users and create shared system resources
+- guest users can only access public share links, never the authenticated UI
 
 ## Stack choice
 
@@ -173,14 +188,21 @@ QuizGPT supports two authentication methods that can coexist:
 
 QuizGPT acts as an OIDC Relying Party. Any OIDC-compliant provider works (Authelia, Authentik, Keycloak, Okta, Google, Azure AD, …).
 
-**Setup:**
+**Minimum setup:**
 
 1. Create a client in your OIDC provider with redirect URI `https://<your-domain>/api/auth/callback/oidc`
 2. Create three groups: **`quiz_super_admin`**, **`quiz_admin`**, and **`quiz_user`**
 3. Assign each authorized user to one of the groups
 4. Set the `OIDC_*` environment variables (see below)
 
-Users not in one of the three groups will see an "Access Denied" page. The first user to log in (OIDC or email) is automatically promoted to **super admin** — a role that cannot be modified or deleted by anyone, including themselves.
+Users not in one of the three groups will see an "Access Denied" page.
+
+Important behavior of the current backend:
+
+- the app expects the `groups` claim to exist and contain one of the three QuizGPT groups
+- the first user to enter the system, whether via email or OIDC, is promoted to **super admin**
+- `PUBLIC_URL` and `OIDC_REDIRECT_URI` must match the externally reachable URL exactly
+- secure auth cookies are enabled automatically when `PUBLIC_URL` starts with `https`
 
 Group mapping:
 
@@ -190,7 +212,14 @@ Group mapping:
 | `quiz_admin` | admin |
 | `quiz_user` | user |
 
-Enable the `groups` scope in your OIDC provider. The app expects the claim `groups` in the ID token.
+The app expects these claims:
+
+- `sub`
+- `email`
+- optionally `name` or `preferred_username`
+- `groups`
+
+Enable the `groups` scope in your OIDC provider, or otherwise ensure the ID token contains a `groups` claim.
 
 ```bash
 OIDC_ISSUER=https://auth.example.com
@@ -199,6 +228,59 @@ OIDC_CLIENT_SECRET=xxx
 OIDC_REDIRECT_URI=https://quiz.example.com/api/auth/callback/oidc
 OIDC_SCOPE=openid profile email groups
 ```
+
+#### Authentik
+
+For Authentik:
+
+1. Create an OAuth2/OpenID Provider + Application for QuizGPT.
+2. Set the redirect URI to `https://<your-domain>/api/auth/callback/oidc`.
+3. Ensure the token exposes `sub`, `email`, and a `groups` claim.
+4. Map users into groups named exactly:
+   - `quiz_super_admin`
+   - `quiz_admin`
+   - `quiz_user`
+
+What usually matters most in Authentik is not only creating groups, but making sure those group values are actually emitted into the `groups` claim seen by QuizGPT.
+
+#### Keycloak
+
+For Keycloak:
+
+1. Create a confidential client for QuizGPT.
+2. Configure the valid redirect URI to `https://<your-domain>/api/auth/callback/oidc`.
+3. Add a mapper that exposes user group membership as a `groups` claim.
+4. Make sure users land in one of:
+   - `quiz_super_admin`
+   - `quiz_admin`
+   - `quiz_user`
+
+If you use realm roles or client roles internally, add a mapping layer so the final claim still matches the exact group names expected by QuizGPT.
+
+#### Authelia
+
+For Authelia:
+
+1. Configure an OIDC client for QuizGPT.
+2. Use the same callback URL as above.
+3. Ensure `sub`, `email`, and `groups` are exposed to the client.
+4. Ensure the `groups` claim contains one of:
+   - `quiz_super_admin`
+   - `quiz_admin`
+   - `quiz_user`
+
+If Authelia uses different internal group names, translate them before they reach QuizGPT. The backend currently reads the `groups` claim literally.
+
+#### OIDC troubleshooting checklist
+
+Before blaming the app, verify:
+
+- `PUBLIC_URL` is correct and public-facing
+- `OIDC_REDIRECT_URI` exactly matches the provider config
+- the ID token includes `sub` and `email`
+- the ID token includes a `groups` claim
+- one allowed QuizGPT group is actually present
+- the app is behind HTTPS if you expect secure cookies in production
 
 ### Email registration (default)
 
@@ -212,9 +294,26 @@ DISABLE_EMAIL_REGISTER=true
 
 | Role | Permissions |
 |------|-------------|
-| `super_admin` | First user created. Everything an admin can do, plus cannot be deleted or demoted by anyone (including themselves). Only one exists. |
-| `admin` | See all quizzes/attempts/groups, manage users, manage system models, edit settings |
-| `user` | See own quizzes/attempts/groups, manage own BYOD models, see system models assigned to them |
+| `super_admin` | First user created. Everything an admin can do, plus cannot be deleted or demoted by anyone, including themselves. |
+| `admin` | Manage users, providers and models, manage shared system resources, access admin surfaces |
+| `user` | Manage own quizzes/groups/attempts, own private providers/models, and system providers/models explicitly assigned to them |
+
+### Resource scoping
+
+The app currently distinguishes between:
+
+- **private providers/models**
+  - owned by one user
+  - visible and editable only by that owner
+- **system providers/models**
+  - created for shared use
+  - managed by admins
+  - assignable to specific non-admin users
+
+This means a non-admin user should only see:
+
+- their own private models/providers
+- shared system models/providers assigned to them
 
 ### Public access (guest shares)
 
