@@ -408,3 +408,166 @@ modelRoutes.delete('/:id/access/:userId', requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'Internal error' });
   }
 });
+
+// ─── POST /api/models/test ──────────────────────────────────────────────────────
+
+const modelTestSchema = z.object({
+  provider: z.enum(['openai', 'anthropic', 'openai_compatible']).optional(),
+  baseUrl: z.string().max(1024).optional(),
+  apiKey: z.string().min(1).max(1024).optional(),
+  providerId: z.string().uuid().optional(),
+  modelId: z.string().min(1).max(255),
+  modelType: z.enum(['llm', 'embedding']),
+});
+
+// ─── POST /api/models/:id/test ──────────────────────────────────────────────────
+
+modelRoutes.post('/:id/test', async (req, res) => {
+  try {
+    if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
+    const { id } = req.params;
+
+    const { rows } = await pool.query(
+      `SELECT m.*,
+        p.provider AS p_provider, p.base_url AS p_base_url, p.api_key_encrypted AS p_api_key_encrypted
+       FROM models m
+       LEFT JOIN providers p ON m.provider_id = p.id
+       WHERE m.id = $1`, [id]
+    );
+    if (rows.length === 0) { res.status(404).json({ error: 'Not found' }); return; }
+    const m = rows[0] as Record<string, unknown>;
+
+    const effectiveProvider = m.provider_id
+      ? (m.p_provider as string) || (m.provider as string)
+      : (m.provider as string);
+    const effectiveBaseUrl = m.provider_id
+      ? ((m.p_base_url as string) || (m.base_url as string) || '')
+      : ((m.base_url as string) || '');
+    const encryptedKey = m.provider_id
+      ? (m.p_api_key_encrypted as string)
+      : (m.api_key_encrypted as string);
+
+    const encKey = config.SETTINGS_ENCRYPTION_KEY;
+    const apiKey = encKey ? decryptValue(encryptedKey, encKey) : '';
+    if (!apiKey) { res.json({ ok: false, error: 'Cannot decrypt API key' }); return; }
+
+    const modelId = m.model_id as string;
+    const modelType = m.model_type as string;
+    const resolved = effectiveBaseUrl.replace(/\/$/, '') || (effectiveProvider === 'openai' ? 'https://api.openai.com/v1' : effectiveProvider === 'anthropic' ? 'https://api.anthropic.com/v1' : '');
+
+    if (modelType === 'llm') {
+      if (effectiveProvider === 'anthropic') {
+        const resp = await fetch(`${resolved}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': config.ANTHROPIC_VERSION,
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({ model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })
+        });
+        if (resp.ok || resp.status === 400) return res.json({ ok: true });
+        const errText = await resp.text().catch(() => '');
+        return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` });
+      }
+      const endpoint = resolved.endsWith('/v1') ? `${resolved}/chat/completions` : `${resolved}/v1/chat/completions`;
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
+      });
+      if (resp.ok || resp.status === 400) return res.json({ ok: true });
+      const errText = await resp.text().catch(() => '');
+      return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` });
+    }
+
+    // embedding
+    const endpoint = resolved.endsWith('/v1') ? `${resolved}/embeddings` : `${resolved}/v1/embeddings`;
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(effectiveProvider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': config.ANTHROPIC_VERSION } : {}),
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model: modelId, input: ['test'] })
+    });
+    if (resp.ok) return res.json({ ok: true });
+    const errText = await resp.text().catch(() => '');
+    return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` });
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+modelRoutes.post('/test', async (req, res) => {
+  try {
+    if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
+    const body = modelTestSchema.safeParse(req.body);
+    if (!body.success) { res.status(400).json({ error: 'Invalid input', details: body.error.flatten() }); return; }
+    let { provider, baseUrl, apiKey, modelId, modelType } = body.data;
+
+    // If providerId is given, resolve config from DB
+    if (body.data.providerId) {
+      const { rows } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
+        'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [body.data.providerId]
+      );
+      if (rows.length === 0) { res.status(404).json({ error: 'Provider not found' }); return; }
+      provider = rows[0].provider as typeof provider;
+      baseUrl = rows[0].base_url ?? undefined;
+      const key = config.SETTINGS_ENCRYPTION_KEY;
+      apiKey = key ? decryptValue(rows[0].api_key_encrypted, key) : '';
+    }
+
+    if (!provider || !apiKey) { res.status(400).json({ error: 'provider and apiKey are required' }); return; }
+    const resolved = ((baseUrl || '').replace(/\/$/, '') || (provider === 'openai' ? 'https://api.openai.com/v1' : provider === 'anthropic' ? 'https://api.anthropic.com/v1' : ''));
+
+    if (modelType === 'llm') {
+      if (provider === 'anthropic') {
+        const resp = await fetch(`${resolved}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': config.ANTHROPIC_VERSION,
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({ model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })
+        });
+        if (resp.ok || resp.status === 400) return res.json({ ok: true });
+        const errText = await resp.text().catch(() => '');
+        return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 300)}` });
+      }
+      // openai / openai_compatible
+      const endpoint = resolved.endsWith('/v1') ? `${resolved}/chat/completions` : `${resolved}/v1/chat/completions`;
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
+      });
+      if (resp.ok || resp.status === 400) return res.json({ ok: true });
+      const errText = await resp.text().catch(() => '');
+      return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 300)}` });
+    }
+
+    // embedding
+    const endpoint = resolved.endsWith('/v1') ? `${resolved}/embeddings` : `${resolved}/v1/embeddings`;
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(provider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': config.ANTHROPIC_VERSION } : {}),
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model: modelId, input: ['test'] })
+    });
+    if (resp.ok) return res.json({ ok: true });
+    const errText = await resp.text().catch(() => '');
+    return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 300)}` });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn('model_test_error', { message: msg });
+    res.json({ ok: false, error: msg.slice(0, 300) });
+  }
+});

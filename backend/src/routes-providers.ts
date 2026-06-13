@@ -160,3 +160,152 @@ providerRoutes.delete('/:id/access/:userId', requireAdmin, async (req, res) => {
     res.status(204).send();
   } catch (err) { logger.error('providers_access_revoke', err); res.status(500).json({ error: 'Internal error' }); }
 });
+
+// ─── POST /api/providers/test ───────────────────────────────────────────────────
+
+const providerTestSchema = z.object({
+  provider: z.enum(['openai', 'anthropic', 'openai_compatible']),
+  baseUrl: z.string().max(1024).optional(),
+  apiKey: z.string().min(1).max(1024),
+});
+
+function normalizeBaseUrl(baseUrl: string | undefined, provider: string): string {
+  const base = (baseUrl || '').replace(/\/$/, '');
+  if (base) return base;
+  if (provider === 'openai') return 'https://api.openai.com/v1';
+  if (provider === 'anthropic') return 'https://api.anthropic.com/v1';
+  return base;
+}
+
+providerRoutes.post('/test', async (req, res) => {
+  try {
+    if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
+    const body = providerTestSchema.safeParse(req.body);
+    if (!body.success) { res.status(400).json({ error: 'Invalid input', details: body.error.flatten() }); return; }
+    const { provider, baseUrl, apiKey } = body.data;
+    const resolved = normalizeBaseUrl(baseUrl, provider);
+
+    if (provider === 'anthropic') {
+      const resp = await fetch(`${resolved}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': config.ANTHROPIC_VERSION,
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet-latest',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'hi' }]
+        })
+      });
+      if (resp.ok || resp.status === 400) {
+        // 400 is ok for Anthropic — API is reachable, just model might be wrong
+        return res.json({ ok: true });
+      }
+      const errText = await resp.text().catch(() => '');
+      return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 300)}` });
+    }
+
+    // openai / openai_compatible
+    const endpoint = resolved.endsWith('/v1') ? `${resolved}/models` : `${resolved}/v1/models`;
+    const resp = await fetch(endpoint, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      }
+    });
+    if (resp.ok) return res.json({ ok: true });
+    const errText = await resp.text().catch(() => '');
+    return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 300)}` });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn('provider_test_error', { message: msg });
+    res.json({ ok: false, error: msg.slice(0, 300) });
+  }
+});
+
+// ─── POST /api/providers/:id/test ───────────────────────────────────────────────
+
+providerRoutes.post('/:id/test', async (req, res) => {
+  try {
+    if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
+    const { id } = req.params;
+    const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
+      'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [id]
+    );
+    if (ex.length === 0) { res.status(404).json({ error: 'Not found' }); return; }
+    const { provider, base_url, api_key_encrypted } = ex[0];
+    const key = config.SETTINGS_ENCRYPTION_KEY;
+    const apiKey = key ? decryptValue(api_key_encrypted, key) : '';
+    if (!apiKey) { res.json({ ok: false, error: 'Cannot decrypt API key' }); return; }
+
+    const resolved = normalizeBaseUrl(base_url ?? undefined, provider);
+
+    if (provider === 'anthropic') {
+      const resp = await fetch(`${resolved}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': config.ANTHROPIC_VERSION,
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model: 'claude-3-5-sonnet-latest', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })
+      });
+      if (resp.ok || resp.status === 400) return res.json({ ok: true });
+      const errText = await resp.text().catch(() => '');
+      return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` });
+    }
+
+    const endpoint = resolved.endsWith('/v1') ? `${resolved}/models` : `${resolved}/v1/models`;
+    const resp = await fetch(endpoint, {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
+    });
+    if (resp.ok) return res.json({ ok: true });
+    const errText = await resp.text().catch(() => '');
+    return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` });
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ─── GET /api/providers/:id/models ──────────────────────────────────────────────
+
+providerRoutes.get('/:id/models', async (req, res) => {
+  try {
+    if (!req.user) { res.status(401).json({ error: 'Not authenticated' }); return; }
+    const { id } = req.params;
+    const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
+      'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [id]
+    );
+    if (ex.length === 0) { res.status(404).json({ error: 'Not found' }); return; }
+    const { provider, base_url, api_key_encrypted } = ex[0];
+
+    if (provider === 'anthropic') {
+      return res.json({ models: [] });
+    }
+
+    const key = config.SETTINGS_ENCRYPTION_KEY;
+    const apiKey = key ? decryptValue(api_key_encrypted, key) : '';
+    if (!apiKey) { res.status(400).json({ error: 'Cannot decrypt API key' }); return; }
+
+    const resolved = normalizeBaseUrl(base_url ?? undefined, provider);
+    const endpoint = resolved.endsWith('/v1') ? `${resolved}/models` : `${resolved}/v1/models`;
+    const resp = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      logger.warn('provider_models_fetch_failed', { providerId: id, status: resp.status, message: errText.slice(0, 200) });
+      return res.json({ models: [] });
+    }
+    const data = await resp.json() as { data?: Array<{ id: string }> };
+    const models = (data.data ?? []).map((m) => m.id).filter(Boolean).sort();
+    res.json({ models });
+  } catch (err) {
+    logger.warn('provider_models_fetch_error', { message: err instanceof Error ? err.message : String(err) });
+    res.json({ models: [] });
+  }
+});

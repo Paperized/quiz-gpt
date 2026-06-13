@@ -28,6 +28,7 @@ export function AdminPage() {
   const [provError, setProvError] = useState('');
   const [showCreateProv, setShowCreateProv] = useState(false);
   const [editProv, setEditProv] = useState<Provider | null>(null);
+  const [testStatus, setTestStatus] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
 
   const isAdmin = user?.role !== 'user';
 
@@ -74,6 +75,26 @@ export function AdminPage() {
   async function handleSetDefault(m: Model) {
     try { await req(`/api/models/${m.id}/default`, { method: 'PUT' }); await fetchModels(); }
     catch (err) { alert(err instanceof Error ? err.message : 'Failed'); }
+  }
+
+  async function handleTestProvider(p: Provider) {
+    setTestStatus(s => ({ ...s, [p.id]: 'loading' }));
+    try {
+      const res = await req<{ ok: boolean; error?: string }>(`/api/providers/${p.id}/test`, { method: 'POST' });
+      setTestStatus(s => ({ ...s, [p.id]: res.ok ? 'ok' : 'error' }));
+    } catch {
+      setTestStatus(s => ({ ...s, [p.id]: 'error' }));
+    }
+  }
+
+  async function handleTestModel(m: Model) {
+    setTestStatus(s => ({ ...s, [m.id]: 'loading' }));
+    try {
+      const res = await req<{ ok: boolean; error?: string }>(`/api/models/${m.id}/test`, { method: 'POST' });
+      setTestStatus(s => ({ ...s, [m.id]: res.ok ? 'ok' : 'error' }));
+    } catch {
+      setTestStatus(s => ({ ...s, [m.id]: 'error' }));
+    }
   }
 
   async function handleGrant(modelId: string) {
@@ -154,6 +175,11 @@ export function AdminPage() {
                         <div className="text-[11px] text-text-muted mt-0.5">{p.provider}{p.baseUrl ? ` · ${p.baseUrl}` : ''} · Key: {p.apiKeyMasked}</div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0 ml-4">
+                        {testStatus[p.id] === 'loading' ? (
+                          <span className="p-1"><svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg></span>
+                        ) : (
+                          <button onClick={() => handleTestProvider(p)} className={`transition-colors p-1 ${testStatus[p.id] === 'ok' ? 'text-green-400' : testStatus[p.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
+                        )}
                         <button onClick={() => setEditProv(p)} className="text-text-muted hover:text-secondary transition-colors p-1"><Icon name="edit" size={14} /></button>
                         <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
                       </div>
@@ -175,28 +201,28 @@ export function AdminPage() {
               </div>
               {modelsError && <div className="bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{modelsError}</div>}
               {modelsLoading ? <div className="flex items-center justify-center h-64"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div> : (<>
-                {systemModels.length > 0 && <div className="space-y-2">{systemModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} />)}</div>}
-                <div className="space-y-2">{userModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} />)}{userModels.length === 0 && systemModels.length === 0 && <p className="text-[13px] text-text-muted italic">No models yet.</p>}</div>
+                {systemModels.length > 0 && <div className="space-y-2">{systemModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} onTest={handleTestModel} testStatus={testStatus[m.id]} />)}</div>}
+                <div className="space-y-2">{userModels.map(m => <ModelCard key={m.id} model={m} isAdmin={!!isAdmin} onDelete={handleDeleteModel} onSetDefault={handleSetDefault} onDetail={setDetailModel} onEdit={setEditModel} onGrant={handleGrant} onRevoke={handleRevoke} onTest={handleTestModel} testStatus={testStatus[m.id]} />)}{userModels.length === 0 && systemModels.length === 0 && <p className="text-[13px] text-text-muted italic">No models yet.</p>}</div>
               </>)}
             </>
           )}
         </div>
       </div>
 
-      {createType && <ModelForm modelType={createType} providers={providers} onClose={() => setCreateType(null)} onSaved={fetchModels} />}
-      {editModel && <ModelForm modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={fetchModels} />}
-      {detailModel && <ModelDetail model={detailModel} onClose={() => setDetailModel(null)} onEdit={() => { const m = detailModel; setDetailModel(null); setEditModel(m); }} />}
-      {showCreateUser && <CreateUserForm onClose={() => setShowCreateUser(false)} onCreated={fetchUsers} />}
-      {showCreateProv && <ProviderForm onClose={() => setShowCreateProv(false)} onSaved={fetchProviders} />}
-      {editProv && <ProviderForm edit={editProv} onClose={() => setEditProv(null)} onSaved={fetchProviders} />}
+      {createType && <ModelForm modelType={createType} providers={providers} onClose={() => setCreateType(null)} onSaved={() => { fetchModels(); setCreateType(null); }} />}
+      {editModel && <ModelForm modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editModel.id]; return ns; }); fetchModels(); setEditModel(null); }} />}
+      {detailModel && <ModelDetail model={detailModel} onClose={() => setDetailModel(null)} onEdit={() => { setDetailModel(null); setEditModel(detailModel); }} />}
+      {showCreateProv && <ProviderForm onClose={() => setShowCreateProv(false)} onSaved={() => { fetchProviders(); setShowCreateProv(false); }} />}
+      {editProv && <ProviderForm edit={editProv} onClose={() => setEditProv(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editProv.id]; return ns; }); fetchProviders(); setEditProv(null); }} />}
     </>
   );
 }
 
-function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, onGrant, onRevoke }: {
+function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, onGrant, onRevoke, onTest, testStatus }: {
   model: Model; isAdmin: boolean; onDelete: (m: Model) => void; onSetDefault: (m: Model) => void;
   onDetail: (m: Model) => void; onEdit: (m: Model) => void;
   onGrant: (id: string) => void; onRevoke: (id: string, userId: string) => void;
+  onTest: (m: Model) => void; testStatus?: 'loading' | 'ok' | 'error';
 }) {
   return (
     <div className="bg-surface-container rounded-lg border border-border-subtle p-4 flex items-center justify-between">
@@ -210,7 +236,12 @@ function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, o
         <div className="text-[11px] text-text-muted mt-0.5">{model.provider} · {model.modelId} · Key: {model.apiKeyMasked}</div>
       </div>
       <div className="flex items-center gap-1 shrink-0 ml-4">
-        <button onClick={() => onSetDefault(model)} className="text-text-muted hover:text-yellow-400 transition-colors p-1" title="Set as default"><Icon name="bolt" size={14} className={model.isDefault ? 'text-yellow-400' : ''} /></button>
+        {testStatus === 'loading' ? (
+          <span className="p-1"><svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg></span>
+        ) : (
+          <button onClick={() => onTest(model)} className={`transition-colors p-1 ${testStatus === 'ok' ? 'text-green-400' : testStatus === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`} title="Test"><Icon name="bolt" size={12} /></button>
+        )}
+        <button onClick={() => onSetDefault(model)} className="text-text-muted hover:text-yellow-400 transition-colors p-1" title="Set as default"><Icon name="star" size={14} fill={model.isDefault} className={model.isDefault ? 'text-yellow-400' : ''} /></button>
         <button onClick={() => onDetail(model)} className="text-text-muted hover:text-on-surface transition-colors p-1" title="View details"><Icon name="search" size={14} /></button>
         <button onClick={() => onEdit(model)} className="text-text-muted hover:text-secondary transition-colors p-1" title="Edit"><Icon name="edit" size={14} /></button>
         <button onClick={() => onDelete(model)} className="text-text-muted hover:text-error transition-colors p-1" title="Delete"><Icon name="delete" size={14} /></button>
@@ -273,6 +304,50 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function fetchProviderModels(provId: string) {
+    setLoadingModels(true); setProviderModels([]);
+    try {
+      const data = await req<{ models: string[] }>(`/api/providers/${provId}/models`);
+      setProviderModels(data.models);
+    } catch { setProviderModels([]); }
+    finally { setLoadingModels(false); }
+  }
+
+  function handleProviderChange(provId: string) {
+    setSelectedProvId(provId);
+    setProviderModels([]);
+    if (!provId) return;
+    fetchProviderModels(provId);
+    const p = providers.find((x) => x.id === provId);
+    if (p) { setProvider(p.provider); setBaseUrl(p.baseUrl ?? ''); }
+  }
+
+  async function handleTest() {
+    if (!modelId) { setTestResult({ ok: false, msg: 'Model ID required' }); return; }
+    setTesting(true); setTestResult(null);
+    try {
+      const body: Record<string, unknown> = { modelId, modelType };
+      if (configMode === 'provider' && selectedProvId) {
+        body.providerId = selectedProvId;
+      } else {
+        body.provider = provider;
+        body.apiKey = apiKey;
+        if (baseUrl) body.baseUrl = baseUrl;
+        if (!provider || !apiKey) { setTestResult({ ok: false, msg: 'Provider and API Key required' }); setTesting(false); return; }
+      }
+      const res = await req<{ ok: boolean; error?: string }>('/api/models/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      setTestResult(res.ok ? { ok: true, msg: 'OK' } : { ok: false, msg: res.error ?? 'Test failed' });
+    } catch (err) {
+      setTestResult({ ok: false, msg: err instanceof Error ? err.message : 'Test failed' });
+    } finally { setTesting(false); }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(''); setSubmitting(true);
@@ -326,7 +401,7 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
 
             {configMode === 'provider' && (
               <div className="relative">
-                <select value={selectedProvId} onChange={e => { setSelectedProvId(e.target.value); const p = providers.find(x => x.id === e.target.value); if (p) { setProvider(p.provider); setBaseUrl(p.baseUrl ?? ''); } }} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
+                <select value={selectedProvId} onChange={e => handleProviderChange(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
                   <option value="">Select a provider...</option>
                   {providers.map(p => <option key={p.id} value={p.id}>{p.label} ({p.provider}){p.isSystem ? ' · System' : ''}</option>)}
                 </select>
@@ -335,7 +410,17 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
             )}
 
             <input type="text" placeholder="Label" value={label} onChange={e => setLabel(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
-            <input type="text" placeholder="Model ID (e.g. gpt-4o)" value={modelId} onChange={e => setModelId(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            {configMode === 'provider' ? (<>
+              <input type="text" list="provider-model-list" placeholder="Model ID (select or type)" value={modelId} onChange={e => setModelId(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+              {loadingModels && <span className="text-[11px] text-text-muted">Loading models...</span>}
+              {providerModels.length > 0 && (
+                <datalist id="provider-model-list">
+                  {providerModels.map(m => <option key={m} value={m} />)}
+                </datalist>
+              )}
+            </>) : (
+              <input type="text" placeholder="Model ID (e.g. gpt-4o)" value={modelId} onChange={e => setModelId(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            )}
 
             {configMode === 'manual' && (<>
               <select value={provider} onChange={e => setProvider(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
@@ -345,7 +430,7 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
                 <option value="openai_compatible">openai_compatible</option>
               </select>
               <input type="text" placeholder="Base URL (optional)" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
-              <input type="password" placeholder={edit ? 'New API Key (leave empty to keep)' : 'API Key'} value={apiKey} onChange={e => setApiKey(e.target.value)} required={!edit} autoComplete="off" data-form-type="other" className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            <input type="password" placeholder={edit ? 'New API Key (leave empty to keep)' : 'API Key'} value={apiKey} onChange={e => setApiKey(e.target.value)} required={!edit} autoComplete="off" data-form-type="other" className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
             </>)}
 
             {!edit && <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System model</label>}
@@ -367,8 +452,18 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
 
             {error && <p className="text-error text-[12px]">{error}</p>}
           </div>
-          <div className="shrink-0 px-6 py-4 border-t border-border-subtle">
-            <button type="submit" disabled={submitting} className="w-full py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50">{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create'}</button>
+          {testResult && (
+            <p className={`shrink-0 px-6 text-[12px] ${testResult.ok ? 'text-green-400' : 'text-error'}`}>
+              {testResult.ok ? '✓' : '✗'} {testResult.msg}
+            </p>
+          )}
+          <div className="shrink-0 px-6 py-4 border-t border-border-subtle flex gap-3">
+            {!edit && (
+              <button type="button" disabled={testing} onClick={handleTest} className="py-2 rounded-lg border border-border-subtle text-[12px] text-text-muted hover:border-secondary hover:text-secondary transition-colors disabled:opacity-50" style={{ flex: '0 0 25%' }}>
+                {testing ? '...' : 'Test'}
+              </button>
+            )}
+            <button type="submit" disabled={submitting} className="flex-1 py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50">{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create'}</button>
           </div>
         </form>
       </div>
@@ -384,6 +479,23 @@ function ProviderForm({ edit, onClose, onSaved }: { edit?: Provider; onClose: ()
   const [isSystem, setIsSystem] = useState(edit?.isSystem ?? false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function handleTestConnection() {
+    if (!provider || !apiKey) { setTestResult({ ok: false, msg: 'Provider and API Key required' }); return; }
+    setTesting(true); setTestResult(null);
+    try {
+      const body: Record<string, unknown> = { provider, apiKey };
+      if (baseUrl) body.baseUrl = baseUrl;
+      const res = await req<{ ok: boolean; error?: string }>('/api/providers/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      setTestResult(res.ok ? { ok: true, msg: 'Connected' } : { ok: false, msg: res.error ?? 'Connection failed' });
+    } catch (err) {
+      setTestResult({ ok: false, msg: err instanceof Error ? err.message : 'Connection failed' });
+    } finally { setTesting(false); }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(''); setSubmitting(true);
@@ -423,8 +535,18 @@ function ProviderForm({ edit, onClose, onSaved }: { edit?: Provider; onClose: ()
             {!edit && <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System provider</label>}
             {error && <p className="text-error text-[12px]">{error}</p>}
           </div>
-          <div className="shrink-0 px-6 py-4 border-t border-border-subtle">
-            <button type="submit" disabled={submitting} className="w-full py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50">{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create Provider'}</button>
+          {testResult && (
+            <p className={`shrink-0 px-6 text-[12px] ${testResult.ok ? 'text-green-400' : 'text-error'}`}>
+              {testResult.ok ? '✓' : '✗'} {testResult.msg}
+            </p>
+          )}
+          <div className="shrink-0 px-6 py-4 border-t border-border-subtle flex gap-3">
+            {!edit && (
+              <button type="button" disabled={testing} onClick={handleTestConnection} className="flex-1 py-2 rounded-lg border border-border-subtle text-[12px] text-text-muted hover:border-secondary hover:text-secondary transition-colors disabled:opacity-50" style={{ flex: '0 0 25%' }}>
+                {testing ? 'Testing...' : 'Test'}
+              </button>
+            )}
+            <button type="submit" disabled={submitting} className="flex-1 py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50" style={{ flex: '1 1 auto' }}>{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create Provider'}</button>
           </div>
         </form>
       </div>

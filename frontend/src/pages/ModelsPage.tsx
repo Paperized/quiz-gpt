@@ -20,6 +20,7 @@ export function ModelsPage() {
   const [createType, setCreateType] = useState<'llm' | 'embedding' | null>(null);
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [detailModel, setDetailModel] = useState<Model | null>(null);
+  const [testStatus, setTestStatus] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
 
   const isAdmin = user?.role !== 'user';
 
@@ -48,6 +49,26 @@ export function ModelsPage() {
     catch (err) { alert(err instanceof Error ? err.message : 'Failed'); }
   }
 
+  async function handleTestProvider(p: Provider) {
+    setTestStatus(s => ({ ...s, [p.id]: 'loading' }));
+    try {
+      const res = await req<{ ok: boolean; error?: string }>(`/api/providers/${p.id}/test`, { method: 'POST' });
+      setTestStatus(s => ({ ...s, [p.id]: res.ok ? 'ok' : 'error' }));
+    } catch {
+      setTestStatus(s => ({ ...s, [p.id]: 'error' }));
+    }
+  }
+
+  async function handleTestModel(m: Model) {
+    setTestStatus(s => ({ ...s, [m.id]: 'loading' }));
+    try {
+      const res = await req<{ ok: boolean; error?: string }>(`/api/models/${m.id}/test`, { method: 'POST' });
+      setTestStatus(s => ({ ...s, [m.id]: res.ok ? 'ok' : 'error' }));
+    } catch {
+      setTestStatus(s => ({ ...s, [m.id]: 'error' }));
+    }
+  }
+
   return (
     <>
       <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
@@ -73,7 +94,14 @@ export function ModelsPage() {
                 {providers.map(p => (
                   <div key={p.id} className="bg-surface-container rounded-lg border border-border-subtle p-4 flex items-center justify-between">
                     <div className="min-w-0"><div className="flex items-center gap-2"><span className="text-[13px] font-medium text-on-surface truncate">{p.label}</span>{p.isSystem && <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/10 text-secondary font-medium shrink-0">SYSTEM</span>}</div><div className="text-[11px] text-text-muted mt-0.5">{p.provider} · Key: {p.apiKeyMasked}</div></div>
-                    <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
+                    <div className="flex items-center gap-1">
+                      {testStatus[p.id] === 'loading' ? (
+                        <span className="p-1"><svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg></span>
+                      ) : (
+                        <button onClick={() => handleTestProvider(p)} className={`transition-colors p-1 ${testStatus[p.id] === 'ok' ? 'text-green-400' : testStatus[p.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
+                      )}
+                      <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
+                    </div>
                   </div>
                 ))}
               </>}
@@ -97,7 +125,12 @@ export function ModelsPage() {
                     <div key={m.id} className="bg-surface-container rounded-lg border border-border-subtle p-4 flex items-center justify-between">
                       <div className="min-w-0"><div className="flex items-center gap-2"><span className="text-[13px] font-medium text-on-surface truncate">{m.label}</span><span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${m.modelType === 'llm' ? 'bg-primary/10 text-primary' : 'bg-amber-500/15 text-amber-400'}`}>{m.modelType}</span>{m.isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 font-medium shrink-0">DEFAULT</span>}</div><div className="text-[11px] text-text-muted mt-0.5">{m.provider} · {m.modelId} · Key: {m.apiKeyMasked}</div></div>
                       <div className="flex items-center gap-1 shrink-0 ml-4">
-                        <button onClick={() => handleSetDefault(m)} className={`text-text-muted hover:text-yellow-400 transition-colors p-1 ${m.isDefault ? 'text-yellow-400' : ''}`}><Icon name="bolt" size={14} /></button>
+                        {testStatus[m.id] === 'loading' ? (
+                          <span className="p-1"><svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" /><path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg></span>
+                        ) : (
+                          <button onClick={() => handleTestModel(m)} className={`transition-colors p-1 ${testStatus[m.id] === 'ok' ? 'text-green-400' : testStatus[m.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
+                        )}
+                        <button onClick={() => handleSetDefault(m)} className={`text-text-muted hover:text-yellow-400 transition-colors p-1 ${m.isDefault ? 'text-yellow-400' : ''}`}><Icon name="star" size={14} fill={m.isDefault} /></button>
                         <button onClick={() => handleDeleteModel(m)} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
                       </div>
                     </div>
@@ -109,8 +142,8 @@ export function ModelsPage() {
         </div>
       </div>
 
-      {createType && <ModelFormSimple modelType={createType} providers={providers} onClose={() => setCreateType(null)} onSaved={fetchModels} />}
-      {editModel && <ModelFormSimple modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={fetchModels} />}
+      {createType && <ModelFormSimple modelType={createType} providers={providers} onClose={() => setCreateType(null)} onSaved={() => { fetchModels(); setCreateType(null); }} />}
+      {editModel && <ModelFormSimple modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editModel.id]; return ns; }); fetchModels(); setEditModel(null); }} />}
       {detailModel && <ModelDetailSimple model={detailModel} onClose={() => setDetailModel(null)} />}
     </>
   );
@@ -126,6 +159,50 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
   const [baseUrl, setBaseUrl] = useState(edit?.baseUrl ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function fetchProviderModels(provId: string) {
+    setLoadingModels(true); setProviderModels([]);
+    try {
+      const data = await req<{ models: string[] }>(`/api/providers/${provId}/models`);
+      setProviderModels(data.models);
+    } catch { setProviderModels([]); }
+    finally { setLoadingModels(false); }
+  }
+
+  function handleProviderChange(provId: string) {
+    setSelectedProvId(provId);
+    setProviderModels([]);
+    if (!provId) return;
+    fetchProviderModels(provId);
+    const p = providers.find((x) => x.id === provId);
+    if (p) { setProvider(p.provider); setBaseUrl(p.baseUrl ?? ''); }
+  }
+
+  async function handleTest() {
+    if (!modelId) { setTestResult({ ok: false, msg: 'Model ID required' }); return; }
+    setTesting(true); setTestResult(null);
+    try {
+      const body: Record<string, unknown> = { modelId, modelType };
+      if (configMode === 'provider' && selectedProvId) {
+        body.providerId = selectedProvId;
+      } else {
+        body.provider = provider;
+        body.apiKey = apiKey;
+        if (baseUrl) body.baseUrl = baseUrl;
+        if (!provider || !apiKey) { setTestResult({ ok: false, msg: 'Provider and API Key required' }); setTesting(false); return; }
+      }
+      const res = await req<{ ok: boolean; error?: string }>('/api/models/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      setTestResult(res.ok ? { ok: true, msg: 'OK' } : { ok: false, msg: res.error ?? 'Test failed' });
+    } catch (err) {
+      setTestResult({ ok: false, msg: err instanceof Error ? err.message : 'Test failed' });
+    } finally { setTesting(false); }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(''); setSubmitting(true);
@@ -153,7 +230,7 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
             </div>
             {configMode === 'provider' && (
               <div className="relative">
-                <select value={selectedProvId} onChange={e => { setSelectedProvId(e.target.value); const p = providers.find(x => x.id === e.target.value); if (p) { setProvider(p.provider); setBaseUrl(p.baseUrl ?? ''); } }} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
+                <select value={selectedProvId} onChange={e => handleProviderChange(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
                   <option value="">Select a provider...</option>
                   {providers.map(p => <option key={p.id} value={p.id}>{p.label} ({p.provider})</option>)}
                 </select>
@@ -161,7 +238,17 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
               </div>
             )}
             <input type="text" placeholder="Label" value={label} onChange={e => setLabel(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
-            <input type="text" placeholder="Model ID (e.g. gpt-4o)" value={modelId} onChange={e => setModelId(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            {configMode === 'provider' ? (<>
+              <input type="text" list="simple-provider-model-list" placeholder="Model ID (select or type)" value={modelId} onChange={e => setModelId(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+              {loadingModels && <span className="text-[11px] text-text-muted">Loading models...</span>}
+              {providerModels.length > 0 && (
+                <datalist id="simple-provider-model-list">
+                  {providerModels.map(m => <option key={m} value={m} />)}
+                </datalist>
+              )}
+            </>) : (
+              <input type="text" placeholder="Model ID (e.g. gpt-4o)" value={modelId} onChange={e => setModelId(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            )}
             {configMode === 'manual' && (<>
               <select value={provider} onChange={e => setProvider(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary">
                 <option value="">Select provider...</option>
@@ -174,8 +261,18 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
             </>)}
             {error && <p className="text-error text-[12px]">{error}</p>}
           </div>
-          <div className="shrink-0 px-6 py-4 border-t border-border-subtle">
-            <button type="submit" disabled={submitting} className="w-full py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50">{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create'}</button>
+          {testResult && (
+            <p className={`shrink-0 px-6 text-[12px] ${testResult.ok ? 'text-green-400' : 'text-error'}`}>
+              {testResult.ok ? '✓' : '✗'} {testResult.msg}
+            </p>
+          )}
+          <div className="shrink-0 px-6 py-4 border-t border-border-subtle flex gap-3">
+            {!edit && (
+              <button type="button" disabled={testing} onClick={handleTest} className="py-2 rounded-lg border border-border-subtle text-[12px] text-text-muted hover:border-secondary hover:text-secondary transition-colors disabled:opacity-50" style={{ flex: '0 0 25%' }}>
+                {testing ? '...' : 'Test'}
+              </button>
+            )}
+            <button type="submit" disabled={submitting} className="flex-1 py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50">{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create'}</button>
           </div>
         </form>
       </div>
