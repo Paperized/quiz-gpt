@@ -67,3 +67,106 @@ export interface QuizShare {
   createdAt: string;
   attemptCount: number;
 }
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+export type AuthProvider = 'oidc' | 'email';
+
+export const OIDC_GROUPS = ['quiz_super_admin', 'quiz_admin', 'quiz_user'] as const;
+export type OIDCGroup = typeof OIDC_GROUPS[number];
+
+export interface User {
+  id: string;
+  sub: string | null;
+  email: string;
+  name: string | null;
+  passwordHash: string | null;
+  role: 'super_admin' | 'admin' | 'user';
+  authProvider: AuthProvider;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ModelType = 'llm' | 'embedding';
+
+export interface Model {
+  id: string;
+  label: string;
+  modelType: ModelType;
+  provider: string;
+  modelId: string;
+  apiKeyEncrypted: string;
+  apiKeyMasked: string;
+  baseUrl: string | null;
+  maxTokens: number | null;
+  temperature: number | null;
+  maxRetrievedChunks: number | null;
+  maxRetrievedChars: number | null;
+  maxEmbeddingCandidates: number | null;
+  embeddingBatchSize: number | null;
+  createdBy: string;
+  isSystem: boolean;
+  isDefault: boolean;
+  assignedTo: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelInput {
+  label: string;
+  modelType?: ModelType;
+  provider: string;
+  modelId: string;
+  apiKey: string;
+  baseUrl?: string;
+  maxTokens?: number;
+  temperature?: number;
+  maxRetrievedChunks?: number;
+  maxRetrievedChars?: number;
+  maxEmbeddingCandidates?: number;
+  embeddingBatchSize?: number;
+  isSystem?: boolean;
+}
+
+export interface ModelUpdateInput {
+  label?: string;
+  provider?: string;
+  modelId?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  maxTokens?: number;
+  temperature?: number;
+  maxRetrievedChunks?: number;
+  maxRetrievedChars?: number;
+  maxEmbeddingCandidates?: number;
+  embeddingBatchSize?: number;
+}
+
+export interface UserPatch {
+  role?: 'admin' | 'user';
+}
+
+export interface ModelAccessInput {
+  userId: string;
+}
+
+// LLM config passed to generation functions
+export interface LLMConfig {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+  maxTokens: number;
+  temperature: number;
+}
+
+export interface EmbeddingConfig {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+  maxCandidates?: number;
+  maxRetrievedChunks?: number;
+  maxRetrievedChars?: number;
+  batchSize?: number;
+}

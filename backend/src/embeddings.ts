@@ -17,7 +17,7 @@ function resolveEmbeddingStyle(): RuntimeEmbeddingStyle {
     if (config.LLM_API_STYLE === 'openai_compatible') return 'openai_compatible';
     return 'anthropic';
   }
-  return config.EMBEDDING_API_STYLE;
+  return config.EMBEDDING_API_STYLE as RuntimeEmbeddingStyle;
 }
 
 function resolveEmbeddingModel(style: RuntimeEmbeddingStyle): string {

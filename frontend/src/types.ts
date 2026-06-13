@@ -205,3 +205,45 @@ export type SettingsDisplay = {
   GENERATE_RATE_LIMIT_MAX_REQUESTS: number;
   ENCRYPTION_CONFIGURED: boolean;
 };
+
+// ─── Auth ──────────────────────────────────────────────────────────────────────
+
+export type UserRole = 'super_admin' | 'admin' | 'user';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: UserRole;
+  authProvider: 'oidc' | 'email';
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AuthStatus {
+  hasUsers: boolean;
+  oidcEnabled: boolean;
+  emailEnabled: boolean;
+}
+
+export interface Model {
+  id: string;
+  label: string;
+  modelType: 'llm' | 'embedding';
+  provider: string;
+  modelId: string;
+  apiKeyMasked: string;
+  baseUrl: string | null;
+  maxTokens: number | null;
+  temperature: number | null;
+  maxRetrievedChunks: number | null;
+  maxRetrievedChars: number | null;
+  maxEmbeddingCandidates: number | null;
+  embeddingBatchSize: number | null;
+  createdBy: string;
+  isSystem: boolean;
+  isDefault: boolean;
+  assignedTo: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}

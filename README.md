@@ -93,8 +93,8 @@ Server logs are JSON lines controlled by `LOG_LEVEL`. They include startup confi
 | `PORT` | No | `3000` | Backend HTTP port |
 | `PUBLIC_URL` | Yes | `http://localhost:3000` | Public app URL injected via runtime `/config.js` |
 | `LOG_LEVEL` | No | `info` | JSON log level: `debug`, `info`, `warn`, `error` |
-| `BASIC_AUTH_USERNAME` | Recommended for public self-hosting | empty | Enables HTTP Basic Auth when paired with `BASIC_AUTH_PASSWORD` |
-| `BASIC_AUTH_PASSWORD` | Recommended for public self-hosting | empty | Password for HTTP Basic Auth |
+| `JWT_SECRET` | Recommended | auto-generated | Static JWT signing key (set to persist sessions across restarts). Generate: `openssl rand -hex 64` |
+| `JWT_EXPIRY` | No | `7d` | JWT session duration |
 | `RATE_LIMIT_WINDOW_MS` | No | `900000` | Rate limit window for API routes |
 | `RATE_LIMIT_MAX_REQUESTS` | No | `300` | Max API requests per window |
 | `GENERATE_RATE_LIMIT_MAX_REQUESTS` | No | `20` | Max quiz generation requests per window |
@@ -167,36 +167,58 @@ All active share links and their attempt counts are visible under **Shares** in 
 
 ## Access control and security
 
-### Basic Auth (built-in)
+QuizGPT supports two authentication methods that can coexist:
 
-Set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` in `.env` to protect the entire admin interface. Basic Auth is enforced only on `/api/*` routes and does not interfere with shared quiz links, which live under `/public/*`.
+### OpenID Connect (SSO)
 
-### Forward Auth with an external auth manager
+QuizGPT acts as an OIDC Relying Party. Any OIDC-compliant provider works (Authelia, Authentik, Keycloak, Okta, Google, Azure AD, …).
 
-If you use an auth manager (Authelia, Authentik, Keycloak, etc.) in front of QuizGPT via a reverse proxy, configure it to **bypass authentication** for the following paths:
+**Setup:**
 
-| Path pattern | Purpose |
+1. Create a client in your OIDC provider with redirect URI `https://<your-domain>/api/auth/callback/oidc`
+2. Create three groups: **`quiz_super_admin`**, **`quiz_admin`**, and **`quiz_user`**
+3. Assign each authorized user to one of the groups
+4. Set the `OIDC_*` environment variables (see below)
+
+Users not in one of the three groups will see an "Access Denied" page. The first user to log in (OIDC or email) is automatically promoted to **super admin** — a role that cannot be modified or deleted by anyone, including themselves.
+
+Group mapping:
+
+| OIDC group | QuizGPT role |
 |---|---|
-| `/public/*` | All guest-facing paths: quiz pages (frontend) and quiz API (backend under `/public/api/*`) |
-| `/assets/*` | Static JS/CSS bundles |
-| `/config.js` | Runtime config injected into the frontend |
-| `/favicon*` | Favicons |
+| `quiz_super_admin` | super_admin |
+| `quiz_admin` | admin |
+| `quiz_user` | user |
 
-All other paths — especially `/api/*` — should remain behind authentication.
+Enable the `groups` scope in your OIDC provider. The app expects the claim `groups` in the ID token.
 
-The public area is intentionally centralised under `/public/`: the guest quiz frontend routes live at `/public/s/:token` and the corresponding backend endpoints at `/public/api/s/:token`, so a single prefix rule is enough.
-
-Example rule for Authelia:
-
-```yaml
-- domain: quiz.example.com
-  policy: bypass
-  resources:
-    - "^/public/.*$"
-    - "^/assets/.*$"
-    - "^/config\\.js$"
-    - "^/favicon.*$"
+```bash
+OIDC_ISSUER=https://auth.example.com
+OIDC_CLIENT_ID=quiz-gpt
+OIDC_CLIENT_SECRET=xxx
+OIDC_REDIRECT_URI=https://quiz.example.com/api/auth/callback/oidc
+OIDC_SCOPE=openid profile email groups
 ```
+
+### Email registration (default)
+
+Enabled by default. Users register with email + password. Set `DISABLE_EMAIL_REGISTER=true` to disable.
+
+```bash
+DISABLE_EMAIL_REGISTER=true
+```
+
+### Roles
+
+| Role | Permissions |
+|------|-------------|
+| `super_admin` | First user created. Everything an admin can do, plus cannot be deleted or demoted by anyone (including themselves). Only one exists. |
+| `admin` | See all quizzes/attempts/groups, manage users, manage system models, edit settings |
+| `user` | See own quizzes/attempts/groups, manage own BYOD models, see system models assigned to them |
+
+### Public access (guest shares)
+
+Public share links (`/public/s/:token`) and static assets remain unauthenticated. The OIDC middleware only protects `/api/*` routes (excluding `/api/auth/*` and `/api/health`).
 
 ## Notes
 

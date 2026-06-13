@@ -1,9 +1,9 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,10 @@ import { pool, runMigrations } from './db.js';
 import { logger, summarizeText } from './logger.js';
 import { generateQuizFromLLM, proposeGroupQuizFromLLM, evaluateFreeTextAnswers } from './llm.js';
 import { normalizeAttemptAnswers, scoreAttempt } from './scoring.js';
-import { getSettingsForDisplay, initializeSettings, saveSettings, settingsSaveSchema } from './settings.js';
+import { authRequired, requireAdmin, isAdminUser } from './auth.js';
+import { authRoutes } from './routes-auth.js';
+import { userRoutes } from './routes-users.js';
+import { modelRoutes } from './routes-models.js';
 import type { AttemptAnswer, FreeTextEvaluation, QuizQuestion, QuizSettings } from './types.js';
 import { QUESTION_TYPES } from './types.js';
 
@@ -41,6 +44,7 @@ app.use(helmet({
   }
 }));
 app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -67,44 +71,13 @@ const generateLimiter = config.GENERATE_RATE_LIMIT_MAX_REQUESTS > 0
     })
   : (_req: Request, _res: Response, next: NextFunction) => next();
 
-function hasBasicAuth(): boolean {
-  return Boolean(config.BASIC_AUTH_USERNAME && config.BASIC_AUTH_PASSWORD);
-}
+// ─── Auth routes ───────────────────────────────────────────────────────────────
 
-function safeCompare(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/models', modelRoutes);
 
-app.use((req, res, next) => {
-  if (!hasBasicAuth()) return next();
-  // Only protect /api/* routes; /public/* and static assets are always open
-  if (!req.path.startsWith('/api/') || req.path === '/api/health') {
-    return next();
-  }
-
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Basic ')) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="quiz-gpt"');
-    return res.status(401).send('Authentication required');
-  }
-
-  const decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf-8');
-  const separator = decoded.indexOf(':');
-  const username = separator >= 0 ? decoded.slice(0, separator) : '';
-  const password = separator >= 0 ? decoded.slice(separator + 1) : '';
-
-  if (
-    safeCompare(username, config.BASIC_AUTH_USERNAME ?? '') &&
-    safeCompare(password, config.BASIC_AUTH_PASSWORD ?? '')
-  ) {
-    return next();
-  }
-
-  res.setHeader('WWW-Authenticate', 'Basic realm="quiz-gpt"');
-  return res.status(401).send('Authentication required');
-});
+// ─── Rate limiting ──────────────────────────────────────────────────────────────
 
 app.use('/api', apiLimiter);
 
@@ -710,7 +683,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/jobs/:id', asyncRoute(async (req, res) => {
+app.get('/api/jobs/:id', authRequired, asyncRoute(async (req, res) => {
   const job = getGenerationJob(req.params.id);
   if (!job) {
     return res.status(404).json({ error: 'Job not found' });
@@ -718,7 +691,7 @@ app.get('/api/jobs/:id', asyncRoute(async (req, res) => {
   return res.json(job);
 }));
 
-app.post('/api/jobs/quizzes/generate', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+app.post('/api/jobs/quizzes/generate', authRequired, generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
   const parsed = parseSourceGenerationRequest(req);
   if ('error' in parsed) {
     logger.warn('quiz_generate.validation_failed', {
@@ -763,7 +736,7 @@ app.post('/api/jobs/quizzes/generate', generateLimiter, upload.array('documents'
   return res.status(202).json({ jobId: job.id });
 }));
 
-app.post('/api/jobs/group-quizzes/propose', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+app.post('/api/jobs/group-quizzes/propose', authRequired, generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
   const sourceParsed = parseSourceGenerationRequest(req);
   if ('error' in sourceParsed) {
     logger.warn('group_quiz_propose.validation_failed', {
@@ -803,7 +776,7 @@ app.post('/api/jobs/group-quizzes/propose', generateLimiter, upload.array('docum
   return res.status(202).json({ jobId: job.id });
 }));
 
-app.post('/api/jobs/group-quizzes/generate', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+app.post('/api/jobs/group-quizzes/generate', authRequired, generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
   const sourceParsed = parseSourceGenerationRequest(req);
   if ('error' in sourceParsed) {
     logger.warn('group_quiz_generate.validation_failed', {
@@ -848,7 +821,7 @@ app.post('/api/jobs/group-quizzes/generate', generateLimiter, upload.array('docu
   return res.status(202).json({ jobId: job.id });
 }));
 
-app.post('/api/jobs/quizzes/:id/regenerate', generateLimiter, asyncRoute(async (req, res) => {
+app.post('/api/jobs/quizzes/:id/regenerate', authRequired, generateLimiter, asyncRoute(async (req, res) => {
   const parsed = regenerateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
@@ -868,7 +841,7 @@ app.post('/api/jobs/quizzes/:id/regenerate', generateLimiter, asyncRoute(async (
   return res.status(202).json({ jobId: job.id });
 }));
 
-app.post('/api/jobs/groups/:id/regenerate', generateLimiter, asyncRoute(async (req, res) => {
+app.post('/api/jobs/groups/:id/regenerate', authRequired, generateLimiter, asyncRoute(async (req, res) => {
   const parsed = regenerateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
@@ -904,14 +877,25 @@ app.post('/api/jobs/groups/:id/regenerate', generateLimiter, asyncRoute(async (r
   return res.status(202).json({ jobId: job.id });
 }));
 
-app.get('/api/quizzes', asyncRoute(async (_req, res) => {
-  const { rows } = await pool.query(`
-    SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
-    FROM quizzes
-    WHERE deleted_at IS NULL
-    ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC
-  `);
-  res.json(rows.map((r) => ({
+app.get('/api/quizzes', authRequired, asyncRoute(async (req, res) => {
+  const isAdmin = req.user?.role === 'admin';
+  const { rows } = await pool.query(
+    isAdmin
+      ? `
+        SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id, created_by
+        FROM quizzes
+        WHERE deleted_at IS NULL
+        ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC
+      `
+      : `
+        SELECT id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id, created_by
+        FROM quizzes
+        WHERE deleted_at IS NULL AND (created_by = $1 OR created_by IS NULL)
+        ORDER BY pinned DESC, pinned_at DESC NULLS LAST, created_at DESC
+      `,
+    isAdmin ? [] : [req.user!.id]
+  );
+  res.json(rows.map((r: Record<string, unknown>) => ({
     id: r.id,
     title: r.title,
     topic: r.topic,
@@ -924,7 +908,7 @@ app.get('/api/quizzes', asyncRoute(async (_req, res) => {
   })));
 }));
 
-app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+app.post('/api/quizzes/generate', authRequired, generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
   const started = Date.now();
   try {
     const parsed = parseSourceGenerationRequest(req);
@@ -974,11 +958,12 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
       documents: parsed.files
     });
     const id = randomUUID();
+    const userId = req.user?.id ?? null;
     const result = await pool.query(`
-      INSERT INTO quizzes(id, title, topic, settings, questions)
-      VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
-      RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id
-    `, [id, llm.title, parsed.topic, JSON.stringify(parsed.settings), JSON.stringify(llm.questions)]);
+      INSERT INTO quizzes(id, title, topic, settings, questions, created_by)
+      VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+      RETURNING id, title, topic, settings, questions, created_at, pinned, pinned_at, group_id, created_by
+    `, [id, llm.title, parsed.topic, JSON.stringify(parsed.settings), JSON.stringify(llm.questions), userId]);
     const q = result.rows[0];
     logger.info('quiz_generate.completed', {
       quizId: q.id,
@@ -996,7 +981,7 @@ app.post('/api/quizzes/generate', generateLimiter, upload.array('documents', 8),
   }
 }));
 
-app.post('/api/group-quizzes/propose', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+app.post('/api/group-quizzes/propose', authRequired, generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
   const sourceParsed = parseSourceGenerationRequest(req);
   if ('error' in sourceParsed) {
     logger.warn('group_quiz_propose.validation_failed', {
@@ -1043,7 +1028,7 @@ app.post('/api/group-quizzes/propose', generateLimiter, upload.array('documents'
   }
 }));
 
-app.post('/api/group-quizzes/generate', generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
+app.post('/api/group-quizzes/generate', authRequired, generateLimiter, upload.array('documents', 8), asyncRoute(async (req, res) => {
   const sourceParsed = parseSourceGenerationRequest(req);
   if ('error' in sourceParsed) {
     logger.warn('group_quiz_generate.validation_failed', {
@@ -1152,7 +1137,7 @@ app.post('/api/group-quizzes/generate', generateLimiter, upload.array('documents
   }
 }));
 
-app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
+app.patch('/api/quizzes/:id', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
   const parsed = updateQuizSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -1215,7 +1200,7 @@ app.patch('/api/quizzes/:id', asyncRoute(async (req, res) => {
   });
 }));
 
-app.delete('/api/quizzes/:id', asyncRoute(async (req, res) => {
+app.delete('/api/quizzes/:id', authRequired, asyncRoute(async (req, res) => {
   const { rowCount } = await pool.query(
     'UPDATE quizzes SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
     [req.params.id]
@@ -1227,7 +1212,7 @@ app.delete('/api/quizzes/:id', asyncRoute(async (req, res) => {
   return res.status(204).send();
 }));
 
-app.post('/api/quizzes/:id/regenerate', generateLimiter, asyncRoute(async (req, res) => {
+app.post('/api/quizzes/:id/regenerate', authRequired, generateLimiter, asyncRoute(async (req, res) => {
   const { id } = req.params;
   const parsed = regenerateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -1286,13 +1271,15 @@ app.post('/api/quizzes/:id/regenerate', generateLimiter, asyncRoute(async (req, 
   }
 }));
 
-app.get('/api/groups', asyncRoute(async (_req, res) => {
-  const { rows } = await pool.query(`
-    SELECT id, name, position, created_at
-    FROM quiz_groups
-    ORDER BY position ASC, created_at ASC
-  `);
-  res.json(rows.map((r) => ({
+app.get('/api/groups', authRequired, asyncRoute(async (req, res) => {
+  const isAdmin = req.user?.role === 'admin';
+  const { rows } = await pool.query(
+    isAdmin
+      ? 'SELECT id, name, position, created_at FROM quiz_groups ORDER BY position ASC, created_at ASC'
+      : 'SELECT id, name, position, created_at FROM quiz_groups WHERE created_by = $1 OR created_by IS NULL ORDER BY position ASC, created_at ASC',
+    isAdmin ? [] : [req.user!.id]
+  );
+  res.json(rows.map((r: Record<string, unknown>) => ({
     id: r.id,
     name: r.name,
     position: r.position,
@@ -1300,7 +1287,7 @@ app.get('/api/groups', asyncRoute(async (_req, res) => {
   })));
 }));
 
-app.post('/api/groups', asyncRoute(async (req, res) => {
+app.post('/api/groups', authRequired, asyncRoute(async (req, res) => {
   const parsed = createGroupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
@@ -1308,15 +1295,15 @@ app.post('/api/groups', asyncRoute(async (req, res) => {
   const { rows: maxPos } = await pool.query('SELECT COALESCE(MAX(position), -1)::int AS max_pos FROM quiz_groups');
   const position = maxPos[0].max_pos + 1;
   const { rows } = await pool.query(
-    'INSERT INTO quiz_groups(name, position) VALUES ($1, $2) RETURNING id, name, position, created_at',
-    [parsed.data.name, position]
+    'INSERT INTO quiz_groups(name, position, created_by) VALUES ($1, $2, $3) RETURNING id, name, position, created_at',
+    [parsed.data.name, position, req.user!.id]
   );
   const g = rows[0];
   logger.info('group_created', { groupId: g.id, name: g.name });
   return res.status(201).json({ id: g.id, name: g.name, position: g.position, createdAt: g.created_at });
 }));
 
-app.patch('/api/groups/:id', asyncRoute(async (req, res) => {
+app.patch('/api/groups/:id', authRequired, asyncRoute(async (req, res) => {
   const parsed = updateGroupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
@@ -1346,7 +1333,7 @@ app.patch('/api/groups/:id', asyncRoute(async (req, res) => {
   return res.json({ id: g.id, name: g.name, position: g.position, createdAt: g.created_at });
 }));
 
-app.delete('/api/groups/:id', asyncRoute(async (req, res) => {
+app.delete('/api/groups/:id', authRequired, asyncRoute(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1370,7 +1357,7 @@ app.delete('/api/groups/:id', asyncRoute(async (req, res) => {
   }
 }));
 
-app.post('/api/groups/:id/regenerate', generateLimiter, asyncRoute(async (req, res) => {
+app.post('/api/groups/:id/regenerate', authRequired, generateLimiter, asyncRoute(async (req, res) => {
   const { id: groupId } = req.params;
   const parsed = regenerateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -1465,7 +1452,7 @@ app.post('/api/groups/:id/regenerate', generateLimiter, asyncRoute(async (req, r
   });
 }));
 
-app.post('/api/attempts', asyncRoute(async (req, res) => {
+app.post('/api/attempts', authRequired, asyncRoute(async (req, res) => {
   const parsed = createAttemptSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues.map((issue) => issue.message).join('; ') });
@@ -1517,11 +1504,12 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
     submittedAt: submittedAt.toISOString()
   });
   const id = randomUUID();
+  const userId = req.user?.id ?? null;
   const { rows } = await pool.query(`
-    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at, evaluations)
-    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9::jsonb)
+    INSERT INTO attempts(id, quiz_id, answers, score, total, started_at, completed_at, submitted_at, evaluations, created_by)
+    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9::jsonb, $10)
     RETURNING id, quiz_id, answers, score, total, started_at, completed_at, submitted_at
-  `, [id, quizId, JSON.stringify(normalizedAnswers), finalScore, total, startedAt, completedAt, submittedAt, evaluations ? JSON.stringify(evaluations) : null]);
+  `, [id, quizId, JSON.stringify(normalizedAnswers), finalScore, total, startedAt, completedAt, submittedAt, evaluations ? JSON.stringify(evaluations) : null, userId]);
   const a = rows[0];
   return res.status(201).json({
     id: a.id,
@@ -1536,7 +1524,7 @@ app.post('/api/attempts', asyncRoute(async (req, res) => {
   });
 }));
 
-app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
+app.get('/api/attempts/:id', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
   const { rows } = await pool.query(`
     SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at, a.evaluations,
@@ -1574,14 +1562,19 @@ app.get('/api/attempts/:id', asyncRoute(async (req, res) => {
   });
 }));
 
-app.get('/api/results/history', asyncRoute(async (req, res) => {
+app.get('/api/results/history', authRequired, asyncRoute(async (req, res) => {
   const quizName = (req.query.quizName as string | undefined)?.trim().toLowerCase();
   const from = req.query.from as string | undefined;
   const to = req.query.to as string | undefined;
+  const isAdmin = req.user?.role === 'admin';
 
   const conditions: string[] = [];
   const params: unknown[] = [];
 
+  if (!isAdmin) {
+    params.push(req.user!.id);
+    conditions.push(`(a.created_by = $${params.length} OR a.created_by IS NULL)`);
+  }
   if (quizName) {
     params.push(`%${quizName}%`);
     conditions.push(`LOWER(q.title) LIKE $${params.length}`);
@@ -1620,10 +1613,21 @@ app.get('/api/results/history', asyncRoute(async (req, res) => {
   })));
 }));
 
-app.get('/api/results/metrics', asyncRoute(async (_req, res) => {
+app.get('/api/results/metrics', authRequired, asyncRoute(async (req, res) => {
+  const isAdmin = req.user?.role === 'admin';
   const [quizzes, attempts] = await Promise.all([
-    pool.query('SELECT id, title FROM quizzes'),
-    pool.query('SELECT quiz_id, score, total, completed_at FROM attempts ORDER BY completed_at ASC')
+    pool.query(
+      isAdmin
+        ? 'SELECT id, title FROM quizzes'
+        : 'SELECT id, title FROM quizzes WHERE created_by = $1 OR created_by IS NULL',
+      isAdmin ? [] : [req.user!.id]
+    ),
+    pool.query(
+      isAdmin
+        ? 'SELECT quiz_id, score, total, completed_at FROM attempts ORDER BY completed_at ASC'
+        : 'SELECT quiz_id, score, total, completed_at FROM attempts WHERE created_by = $1 OR created_by IS NULL ORDER BY completed_at ASC',
+      isAdmin ? [] : [req.user!.id]
+    )
   ]);
 
   const activeQuizzes = quizzes.rows.filter((q) => true);
@@ -1661,21 +1665,6 @@ app.get('/api/results/metrics', asyncRoute(async (_req, res) => {
   });
 }));
 
-app.get('/api/settings', asyncRoute(async (_req, res) => {
-  const display = await getSettingsForDisplay();
-  return res.json(display);
-}));
-
-app.put('/api/settings', asyncRoute(async (req, res) => {
-  const parsed = settingsSaveSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join('; ') });
-  }
-  await saveSettings(parsed.data);  logger.info('settings_saved', { keys: Object.keys(parsed.data) });
-  const display = await getSettingsForDisplay();
-  return res.json(display);
-}));
-
 const createShareSchema = z.object({
   guestName: z.string().trim().min(1).max(100),
   maxAttempts: z.number().int().min(1).max(1000).nullable().optional(),
@@ -1694,7 +1683,7 @@ const guestAttemptSchema = z.object({
 
 // ─── Share management (auth-protected) ───────────────────────────────────────
 
-app.post('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
+app.post('/api/quizzes/:id/shares', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
   const quiz = await pool.query('SELECT id FROM quizzes WHERE id = $1', [id]);
   if (!quiz.rows[0]) return res.status(404).json({ error: 'Quiz not found' });
@@ -1721,7 +1710,7 @@ app.post('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
   });
 }));
 
-app.get('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
+app.get('/api/quizzes/:id/shares', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
   const { rows } = await pool.query(`
     SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
@@ -1739,7 +1728,7 @@ app.get('/api/quizzes/:id/shares', asyncRoute(async (req, res) => {
   })));
 }));
 
-app.get('/api/shares', asyncRoute(async (_req, res) => {
+app.get('/api/shares', authRequired, asyncRoute(async (_req, res) => {
   const { rows } = await pool.query(`
     SELECT s.id, s.quiz_id, s.token, s.guest_name, s.max_attempts, s.expires_at, s.created_at,
            q.title AS quiz_title, q.deleted_at AS quiz_deleted_at,
@@ -1758,7 +1747,7 @@ app.get('/api/shares', asyncRoute(async (_req, res) => {
   })));
 }));
 
-app.delete('/api/shares/:shareId', asyncRoute(async (req, res) => {
+app.delete('/api/shares/:shareId', authRequired, asyncRoute(async (req, res) => {
   const { rowCount } = await pool.query('DELETE FROM quiz_shares WHERE id = $1', [req.params.shareId]);
   if (!rowCount) return res.status(404).json({ error: 'Share not found' });
   logger.info('share_deleted', { shareId: req.params.shareId });
@@ -1956,7 +1945,6 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 runMigrations()
-  .then(() => initializeSettings())
   .then(() => {
     if (!config.SETTINGS_ENCRYPTION_KEY) {
       logger.warn('security.encryption_key_missing', {
@@ -1968,7 +1956,6 @@ runMigrations()
         port: config.PORT,
         publicUrl: config.PUBLIC_URL,
         nodeEnv: process.env.NODE_ENV ?? 'development',
-        basicAuthEnabled: Boolean(config.BASIC_AUTH_USERNAME && config.BASIC_AUTH_PASSWORD),
         rateLimit: {
           windowMs: config.RATE_LIMIT_WINDOW_MS,
           maxRequests: config.RATE_LIMIT_MAX_REQUESTS,

@@ -17,7 +17,7 @@ function deriveKey(passphrase: string): Buffer {
   return createHash('sha256').update(passphrase).digest();
 }
 
-function encryptValue(plaintext: string, passphrase: string): string {
+export function encryptValue(plaintext: string, passphrase: string): string {
   const key = deriveKey(passphrase);
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
@@ -26,7 +26,7 @@ function encryptValue(plaintext: string, passphrase: string): string {
   return `enc:${iv.toString('hex')}:${tag.toString('hex')}:${ciphertext.toString('hex')}`;
 }
 
-function decryptValue(stored: string, passphrase: string): string {
+export function decryptValue(stored: string, passphrase: string): string {
   if (!stored.startsWith('enc:')) return stored;
   const parts = stored.split(':');
   if (parts.length !== 4) throw new Error('Invalid encrypted value format');

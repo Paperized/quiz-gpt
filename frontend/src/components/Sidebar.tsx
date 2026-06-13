@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Icon } from './Icon';
 import { RegenerateDialog } from './RegenerateDialog';
 import { useQuizzes } from '../context';
+import { useAuth } from '../auth.js';
 import { req } from '../api';
 import { getSidebarCollapsedState, setSidebarCollapsedState } from '../helpers';
 import type { GroupQuizGenerationResult, Quiz, QuizGroup } from '../types';
@@ -219,6 +220,7 @@ function GroupHeader({ group, onRename, onDelete, onRegenerate }: {
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { quizzes, groups, reload, reloadGroups } = useQuizzes();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(getSidebarCollapsedState);
@@ -548,12 +550,38 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         {/* Footer */}
         <div className="border-t border-border-subtle px-2 py-4 space-y-1">
           <button
-            onClick={() => { navigate('/settings'); onClose(); }}
-            className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${location.pathname === '/settings' ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+            onClick={() => { navigate('/profile'); onClose(); }}
+            className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${location.pathname === '/profile' ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
           >
-            <Icon name="settings" size={18} className={location.pathname === '/settings' ? 'text-secondary' : ''} />
-            <span className="text-[12px]">Settings</span>
+            <Icon name="person" size={18} className={location.pathname === '/profile' ? 'text-secondary' : ''} />
+            <span className="text-[12px]">Profile</span>
           </button>
+          {(user?.role === 'admin' || user?.role === 'super_admin') ? (
+            <button
+              onClick={() => { navigate('/admin'); onClose(); }}
+              className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${location.pathname.startsWith('/admin') ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+            >
+              <Icon name="admin_panel_settings" size={18} className={location.pathname.startsWith('/admin') ? 'text-secondary' : ''} />
+              <span className="text-[12px]">Admin</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => { navigate('/models'); onClose(); }}
+              className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${location.pathname === '/models' ? 'bg-surface-container-highest text-on-surface border-l-2 border-secondary' : 'text-text-muted hover:text-on-surface hover:bg-surface-variant'}`}
+            >
+              <Icon name="psychology" size={18} className={location.pathname === '/models' ? 'text-secondary' : ''} />
+              <span className="text-[12px]">Models</span>
+            </button>
+          )}
+          {user && (
+            <button
+              onClick={() => { logout().catch(() => {}); }}
+              className="w-full flex items-center gap-3 px-4 py-2 rounded transition-colors text-text-muted hover:text-error hover:bg-surface-variant"
+            >
+              <Icon name="arrow_back" size={18} />
+              <span className="text-[12px]">Logout</span>
+            </button>
+          )}
         </div>
       </div>
     </nav>
