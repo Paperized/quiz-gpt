@@ -40,7 +40,7 @@ Why this stack: small operational surface, explicit SQL control, and provider ab
 cp .env.example .env
 ```
 
-2. Configure `.env` (`DATABASE_URL` + LLM variables are required). For local non-Docker DB, change `DATABASE_URL` host from `db` to your local host (e.g. `localhost`).
+2. Configure `.env` (`DATABASE_URL` is required). For local non-Docker DB, change `DATABASE_URL` host from `db` to your local host (e.g. `localhost`).
 3. Install deps:
 
 ```bash
@@ -90,15 +90,15 @@ When you pass `sourceText`, uploaded docs, or `githubRepoUrl`, backend does:
 1. Extract and normalize text.
 2. Chunk corpus.
 3. Lexical pre-filter for candidate pruning.
-4. **Remote embeddings retrieval** (provider API), not local embedding models.
+4. **Remote embeddings retrieval** through the embedding model configured in the app.
 5. Rank by semantic similarity + lexical prior.
-6. Send only top chunks to the LLM (`MAX_RETRIEVED_*` budgets).
+6. Send only top chunks to the LLM using the app's built-in retrieval budgets.
 
 This avoids context explosion on big repositories.
 
 ## Logging
 
-Server logs are JSON lines controlled by `LOG_LEVEL`. They include startup config (without secrets), generation inputs summarized by size/preview, provider/model settings, retrieval counts, attempts, and clear error messages without stack traces.
+Server logs are JSON lines controlled by `LOG_LEVEL`. They include startup config, generation inputs summarized by size/preview, provider/model settings, retrieval counts, attempts, and clear error messages without stack traces.
 
 ## Environment variables
 
@@ -114,71 +114,40 @@ Server logs are JSON lines controlled by `LOG_LEVEL`. They include startup confi
 | `RATE_LIMIT_MAX_REQUESTS` | No | `300` | Max API requests per window |
 | `GENERATE_RATE_LIMIT_MAX_REQUESTS` | No | `20` | Max quiz generation requests per window |
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
-| `LLM_API_STYLE` | No | `openai` | `openai`, `anthropic`, `openai_compatible` |
-| `LLM_BASE_URL` | Yes | `https://api.openai.com/v1` | LLM provider base URL |
-| `LLM_API_KEY` | Yes for generation | empty | LLM API key |
-| `LLM_MODEL` | Yes | `gpt-4o` | LLM model ID |
-| `LLM_MAX_TOKENS` | No | `2000` | Max output tokens |
-| `LLM_TEMPERATURE` | No | `0.7` | Sampling temperature |
-| `ANTHROPIC_VERSION` | Anthropic only | `2023-06-01` | `anthropic-version` header |
-| `EMBEDDING_API_STYLE` | No | `same_as_llm` | `same_as_llm`, `openai`, `anthropic`, `openai_compatible` |
-| `EMBEDDING_BASE_URL` | No | empty | Optional embeddings base URL override |
-| `EMBEDDING_API_KEY` | No | empty | Optional embeddings API key override |
-| `EMBEDDING_MODEL` | No | `text-embedding-3-small` | Embedding model ID |
-| `MAX_EMBEDDING_CANDIDATES` | No | `220` | Max chunk candidates to embed |
-| `EMBEDDING_BATCH_SIZE` | No | `64` | Batch size per embeddings request |
 | `GITHUB_TOKEN` | Optional | empty | Improves GitHub API rate limits/private access |
-| `MAX_RETRIEVED_CHUNKS` | No | `16` | Top chunks sent to LLM |
-| `MAX_RETRIEVED_CHARS` | No | `28000` | Character budget sent to LLM |
 
-## Provider examples
+## Models and providers
 
-### OpenAI (LLM + embeddings)
+QuizGPT no longer reads global LLM or embedding credentials from environment variables.
+Generation and retrieval are configured inside the app:
 
-```env
-LLM_API_STYLE=openai
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=sk-...
-LLM_MODEL=gpt-4o
-EMBEDDING_API_STYLE=same_as_llm
-EMBEDDING_MODEL=text-embedding-3-small
-```
+- create one or more providers in the admin UI
+- create LLM and embedding models linked to those providers
+- assign access to the right users
+- choose the default LLM and optional default embedding model from the app
+- optionally override the selected models directly from the quiz generation pages
 
-### OpenAI-compatible (Ollama / LM Studio / gateways)
+What this means operationally:
 
-```env
-LLM_API_STYLE=openai_compatible
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
-LLM_MODEL=qwen3:32b
-EMBEDDING_API_STYLE=same_as_llm
-EMBEDDING_MODEL=nomic-embed-text
-```
+- if a user has no accessible default LLM and does not select one explicitly, quiz generation fails
+- embeddings are used only when an embedding model is selected or configured as default
+- retrieval budgets and batching are app defaults, not deploy-time env knobs
 
-### Anthropic LLM + external embeddings endpoint
+Common setups:
 
-Anthropic docs currently state they do not provide native embedding models; use a separate embeddings provider.
-
-```env
-LLM_API_STYLE=anthropic
-LLM_BASE_URL=https://api.anthropic.com
-LLM_API_KEY=sk-ant-...
-LLM_MODEL=claude-sonnet-4-20250514
-ANTHROPIC_VERSION=2023-06-01
-
-EMBEDDING_API_STYLE=openai_compatible
-EMBEDDING_BASE_URL=https://<embedding-provider>/v1
-EMBEDDING_API_KEY=<embedding-key>
-EMBEDDING_MODEL=voyage-3.5
-```
+- OpenAI: create an `openai` provider with `https://api.openai.com/v1`, then create an LLM model such as `gpt-4o` and, if desired, an embedding model such as `text-embedding-3-small`.
+- OpenAI-compatible: create an `openai_compatible` provider pointing to Ollama, LM Studio, LiteLLM, vLLM, OpenRouter, or another compatible gateway, then create the matching LLM and embedding models in the UI.
+- Anthropic: create an `anthropic` provider for the Claude model you want, and if you need retrieval also create a separate embedding provider/model because Anthropic embeddings are not assumed by the app.
 
 ## Sharing quizzes
 
 You can share any quiz with friends or colleagues without giving them access to your QuizGPT instance. From a quiz page, click the **Share** icon to generate a unique link. Optionally set a maximum number of attempts and an expiry date.
 
-The guest experience is fully self-contained: the shared link loads a fullscreen quiz page that requires no login, does not interact with the LLM, and does not consume any API tokens. Answers are evaluated server-side against the already-generated questions stored in the database.
+The guest experience is fully self-contained: the shared link loads a fullscreen quiz page that requires no login and does not use quiz-generation credentials. Answers are evaluated server-side against the already-generated questions stored in the database. Guest free-text answers are stored but treated as incorrect, with no AI evaluation or explanation returned.
 
 All active share links and their attempt counts are visible under **Shares** in the sidebar, where you can also revoke them at any time.
+
+Guest attempts are also visible to the quiz owner in **Results** and can be opened from the review screen just like regular attempts. This means owners can audit both their own attempts and guest attempts on the quizzes they created.
 
 ## Access control and security
 
@@ -321,7 +290,7 @@ Public share links (`/public/s/:token`) and static assets remain unauthenticated
 
 ## Notes
 
-- If you want LiteLLM, connect it as external endpoint via `LLM_BASE_URL` / `EMBEDDING_BASE_URL`.
+- If you want LiteLLM, expose it as an `openai_compatible` provider inside the app.
 - For very large/private GitHub repos, set `GITHUB_TOKEN`.
 - On every push to `main`, GitHub Actions builds and publishes the app image to `ghcr.io/paperized/quiz-gpt`.
 - The default `SETTINGS_ENCRYPTION_KEY` in `.env.example` is public — always replace it with your own before deploying: `openssl rand -hex 32`.

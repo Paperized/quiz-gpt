@@ -186,26 +186,6 @@ export type AttemptReview = {
   quiz: Quiz;
 };
 
-export type SettingsDisplay = {
-  LLM_API_STYLE: string;
-  LLM_BASE_URL: string;
-  LLM_API_KEY_MASKED: string;
-  LLM_MODEL: string;
-  LLM_MAX_TOKENS: number;
-  LLM_TEMPERATURE: number;
-  EMBEDDING_API_STYLE: string;
-  EMBEDDING_BASE_URL: string;
-  EMBEDDING_API_KEY_MASKED: string;
-  EMBEDDING_MODEL: string;
-  MAX_EMBEDDING_CANDIDATES: number;
-  EMBEDDING_BATCH_SIZE: number;
-  MAX_RETRIEVED_CHUNKS: number;
-  MAX_RETRIEVED_CHARS: number;
-  RATE_LIMIT_MAX_REQUESTS: number;
-  GENERATE_RATE_LIMIT_MAX_REQUESTS: number;
-  ENCRYPTION_CONFIGURED: boolean;
-};
-
 // ─── Auth ──────────────────────────────────────────────────────────────────────
 
 export type UserRole = 'super_admin' | 'admin' | 'user';

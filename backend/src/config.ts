@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+export const DEFAULT_LLM_MAX_TOKENS = 2000;
+export const DEFAULT_LLM_TEMPERATURE = 0.7;
+export const DEFAULT_EMBEDDING_BATCH_SIZE = 64;
+export const DEFAULT_MAX_RETRIEVED_CHUNKS = 16;
+export const DEFAULT_MAX_RETRIEVED_CHARS = 28000;
+export const DEFAULT_MAX_EMBEDDING_CANDIDATES = 220;
+export const ANTHROPIC_API_VERSION = '2023-06-01';
+
 export const configSchema = z.object({
   PORT: z.coerce.number().default(3000),
   PUBLIC_URL: z.string().default('http://localhost:3000'),
@@ -21,22 +29,7 @@ export const configSchema = z.object({
     return v;
   }, z.boolean().default(false)),
   JWT_SECRET: z.string().optional(),
-  JWT_EXPIRY: z.string().default('7d'),
-  LLM_API_STYLE: z.string().default('openai'),
-  LLM_BASE_URL: z.string().default('https://api.openai.com/v1'),
-  LLM_API_KEY: z.string().default(''),
-  LLM_MODEL: z.string().default('gpt-4o'),
-  LLM_MAX_TOKENS: z.coerce.number().default(2000),
-  LLM_TEMPERATURE: z.coerce.number().default(0.7),
-  ANTHROPIC_VERSION: z.string().default('2023-06-01'),
-  EMBEDDING_API_STYLE: z.string().default('same_as_llm'),
-  EMBEDDING_BASE_URL: z.string().optional(),
-  EMBEDDING_API_KEY: z.string().optional(),
-  EMBEDDING_MODEL: z.string().optional(),
-  EMBEDDING_BATCH_SIZE: z.coerce.number().default(64),
-  MAX_RETRIEVED_CHUNKS: z.coerce.number().default(16),
-  MAX_RETRIEVED_CHARS: z.coerce.number().default(28000),
-  MAX_EMBEDDING_CANDIDATES: z.coerce.number().default(220)
+  JWT_EXPIRY: z.string().default('7d')
 });
 
 // Strip empty strings so Zod .default() kicks in instead of failing validation

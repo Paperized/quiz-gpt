@@ -1,5 +1,13 @@
 import { pool } from './db.js';
-import { config } from './config.js';
+import {
+  config,
+  DEFAULT_EMBEDDING_BATCH_SIZE,
+  DEFAULT_LLM_MAX_TOKENS,
+  DEFAULT_LLM_TEMPERATURE,
+  DEFAULT_MAX_EMBEDDING_CANDIDATES,
+  DEFAULT_MAX_RETRIEVED_CHARS,
+  DEFAULT_MAX_RETRIEVED_CHUNKS
+} from './config.js';
 import { decryptValue } from './encryption.js';
 import type { LLMConfig, EmbeddingConfig } from './types.js';
 
@@ -28,12 +36,12 @@ async function resolveConfig(modelId: string, modelType: 'llm' | 'embedding', us
     baseUrl: (m.effective_base_url as string) || '',
     apiKey,
     modelId: m.model_id as string,
-    maxTokens: (m.max_tokens as number) ?? config.LLM_MAX_TOKENS,
-    temperature: (m.temperature as number) ?? config.LLM_TEMPERATURE,
-    maxCandidates: (m.max_embedding_candidates as number) ?? config.MAX_EMBEDDING_CANDIDATES,
-    maxRetrievedChunks: (m.max_retrieved_chunks as number) ?? config.MAX_RETRIEVED_CHUNKS,
-    maxRetrievedChars: (m.max_retrieved_chars as number) ?? config.MAX_RETRIEVED_CHARS,
-    batchSize: (m.embedding_batch_size as number) ?? config.EMBEDDING_BATCH_SIZE,
+    maxTokens: (m.max_tokens as number) ?? DEFAULT_LLM_MAX_TOKENS,
+    temperature: (m.temperature as number) ?? DEFAULT_LLM_TEMPERATURE,
+    maxCandidates: (m.max_embedding_candidates as number) ?? DEFAULT_MAX_EMBEDDING_CANDIDATES,
+    maxRetrievedChunks: (m.max_retrieved_chunks as number) ?? DEFAULT_MAX_RETRIEVED_CHUNKS,
+    maxRetrievedChars: (m.max_retrieved_chars as number) ?? DEFAULT_MAX_RETRIEVED_CHARS,
+    batchSize: (m.embedding_batch_size as number) ?? DEFAULT_EMBEDDING_BATCH_SIZE,
   };
 }
 

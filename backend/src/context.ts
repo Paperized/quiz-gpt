@@ -1,6 +1,11 @@
 import mammoth from 'mammoth';
 import pdfParse from '@cedrugs/pdf-parse';
-import { config } from './config.js';
+import {
+  config,
+  DEFAULT_MAX_EMBEDDING_CANDIDATES,
+  DEFAULT_MAX_RETRIEVED_CHARS,
+  DEFAULT_MAX_RETRIEVED_CHUNKS
+} from './config.js';
 import { embedTexts, rankByEmbeddingSimilarity } from './embeddings.js';
 import { logger, summarizeText } from './logger.js';
 import type { EmbeddingConfig } from './types.js';
@@ -322,9 +327,9 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
     }
   }
 
-  const maxCandidates = embeddingConfig?.maxCandidates ?? cfg.MAX_EMBEDDING_CANDIDATES;
-  const maxChunks = embeddingConfig?.maxRetrievedChunks ?? cfg.MAX_RETRIEVED_CHUNKS;
-  const maxChars = embeddingConfig?.maxRetrievedChars ?? cfg.MAX_RETRIEVED_CHARS;
+  const maxCandidates = embeddingConfig?.maxCandidates ?? DEFAULT_MAX_EMBEDDING_CANDIDATES;
+  const maxChunks = embeddingConfig?.maxRetrievedChunks ?? DEFAULT_MAX_RETRIEVED_CHUNKS;
+  const maxChars = embeddingConfig?.maxRetrievedChars ?? DEFAULT_MAX_RETRIEVED_CHARS;
 
   const preSelected = chunks
     .sort((a, b) => b.score - a.score)
@@ -382,7 +387,7 @@ async function buildRetrievedContext(topic: string, settingsSummary: string, doc
   return sections.join('\n\n---\n\n');
 }
 
-export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs, cfg: typeof config, embeddingConfig: EmbeddingConfig | null): Promise<string> {
+export async function buildSourceContext(topic: string, settingsSummary: string, sources: SourceInputs, embeddingConfig: EmbeddingConfig | null): Promise<string> {
   const docs: SourceDocument[] = [];
   const topicTerms = new Set(tokenize(`${topic} ${settingsSummary}`));
   logger.info('source_context.build_started', {
@@ -433,10 +438,10 @@ export async function buildSourceContext(topic: string, settingsSummary: string,
     return '';
   }
 
-  const context = await buildRetrievedContext(topic, settingsSummary, docs, cfg, embeddingConfig);
+  const context = await buildRetrievedContext(topic, settingsSummary, docs, config, embeddingConfig);
   logger.info('source_context.build_completed', {
     documents: docs.length,
     contextChars: context.length
   });
-  return trimForBudget(context, cfg.MAX_RETRIEVED_CHARS);
+  return trimForBudget(context, embeddingConfig?.maxRetrievedChars ?? DEFAULT_MAX_RETRIEVED_CHARS);
 }

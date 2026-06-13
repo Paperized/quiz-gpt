@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from './db.js';
-import { config } from './config.js';
+import { ANTHROPIC_API_VERSION, config } from './config.js';
 import { logger } from './logger.js';
 import { authRequired, requireAdmin, isAdminUser } from './auth.js';
 import { encryptValue, decryptValue, maskSecret } from './encryption.js';
@@ -229,7 +229,7 @@ providerRoutes.post('/test', async (req, res) => {
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'anthropic-version': config.ANTHROPIC_VERSION,
+          'anthropic-version': ANTHROPIC_API_VERSION,
           Authorization: `Bearer ${apiKey}`
         },
         body: JSON.stringify({
@@ -289,7 +289,7 @@ providerRoutes.post('/:id/test', async (req, res) => {
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'anthropic-version': config.ANTHROPIC_VERSION,
+          'anthropic-version': ANTHROPIC_API_VERSION,
           Authorization: `Bearer ${apiKey}`
         },
         body: JSON.stringify({ model: 'claude-3-5-sonnet-latest', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })

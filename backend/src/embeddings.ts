@@ -1,4 +1,4 @@
-import { config } from './config.js';
+import { ANTHROPIC_API_VERSION, DEFAULT_EMBEDDING_BATCH_SIZE } from './config.js';
 import { logger } from './logger.js';
 import type { EmbeddingConfig } from './types.js';
 
@@ -12,33 +12,6 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, '');
 }
 
-function resolveEmbeddingStyle(): RuntimeEmbeddingStyle {
-  if (config.EMBEDDING_API_STYLE === 'same_as_llm') {
-    if (config.LLM_API_STYLE === 'openai') return 'openai';
-    if (config.LLM_API_STYLE === 'openai_compatible') return 'openai_compatible';
-    return 'anthropic';
-  }
-  return config.EMBEDDING_API_STYLE as RuntimeEmbeddingStyle;
-}
-
-function resolveEmbeddingModel(style: RuntimeEmbeddingStyle): string {
-  if (config.EMBEDDING_MODEL?.trim()) return config.EMBEDDING_MODEL.trim();
-  if (style === 'openai' || style === 'openai_compatible') return 'text-embedding-3-small';
-  return 'voyage-3.5';
-}
-
-function resolveEmbeddingBaseUrl(): string {
-  return normalizeBaseUrl(config.EMBEDDING_BASE_URL?.trim() || config.LLM_BASE_URL);
-}
-
-function resolveEmbeddingApiKey(): string {
-  const key = config.EMBEDDING_API_KEY?.trim() || config.LLM_API_KEY;
-  if (!key) {
-    throw new Error('Embedding API key is missing. Set EMBEDDING_API_KEY or LLM_API_KEY.');
-  }
-  return key;
-}
-
 function buildEndpoint(style: RuntimeEmbeddingStyle, baseUrl: string): string {
   if (baseUrl.endsWith('/v1')) return `${baseUrl}/embeddings`;
   return `${baseUrl}/v1/embeddings`;
@@ -49,7 +22,7 @@ function buildHeaders(style: RuntimeEmbeddingStyle, apiKey: string, anthropicVer
     return {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
-      'anthropic-version': anthropicVersion || config.ANTHROPIC_VERSION,
+      'anthropic-version': anthropicVersion || ANTHROPIC_API_VERSION,
       Authorization: `Bearer ${apiKey}`
     };
   }
@@ -146,36 +119,23 @@ async function requestEmbeddingsDirect(
   return vectors;
 }
 
-async function requestEmbeddings(values: string[]): Promise<number[][]> {
-  const style = resolveEmbeddingStyle();
-  const model = resolveEmbeddingModel(style);
-  const baseUrl = resolveEmbeddingBaseUrl();
-  const apiKey = resolveEmbeddingApiKey();
-  return requestEmbeddingsDirect(values, style, model, baseUrl, apiKey);
-}
-
-export async function embedTexts(values: string[], embeddingConfig?: EmbeddingConfig): Promise<number[][]> {
+export async function embedTexts(values: string[], embeddingConfig: EmbeddingConfig): Promise<number[][]> {
   const out: number[][] = [];
 
-  if (embeddingConfig) {
-    const style = normalizeProvider(embeddingConfig.provider);
-    const batchSize = embeddingConfig.batchSize ?? config.EMBEDDING_BATCH_SIZE;
-    for (let i = 0; i < values.length; i += batchSize) {
-      const slice = values.slice(i, i + batchSize);
-      const vectors = await requestEmbeddingsDirect(
-        slice, style, embeddingConfig.modelId,
-        normalizeBaseUrl(embeddingConfig.baseUrl), embeddingConfig.apiKey
-      );
-      out.push(...vectors);
-    }
-    return out;
-  }
-
-  for (let i = 0; i < values.length; i += config.EMBEDDING_BATCH_SIZE) {
-    const slice = values.slice(i, i + config.EMBEDDING_BATCH_SIZE);
-    const vectors = await requestEmbeddings(slice);
+  const style = normalizeProvider(embeddingConfig.provider);
+  const batchSize = embeddingConfig.batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE;
+  for (let i = 0; i < values.length; i += batchSize) {
+    const slice = values.slice(i, i + batchSize);
+    const vectors = await requestEmbeddingsDirect(
+      slice,
+      style,
+      embeddingConfig.modelId,
+      normalizeBaseUrl(embeddingConfig.baseUrl),
+      embeddingConfig.apiKey
+    );
     out.push(...vectors);
   }
+
   return out;
 }
 

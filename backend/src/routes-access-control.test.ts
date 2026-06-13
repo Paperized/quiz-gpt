@@ -20,9 +20,9 @@ vi.mock('./logger.js', () => ({
 
 vi.mock('./config.js', () => ({
   config: {
-    SETTINGS_ENCRYPTION_KEY: 'enc-key',
-    ANTHROPIC_VERSION: '2023-06-01'
-  }
+    SETTINGS_ENCRYPTION_KEY: 'enc-key'
+  },
+  ANTHROPIC_API_VERSION: '2023-06-01'
 }));
 
 vi.mock('./encryption.js', () => ({

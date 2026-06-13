@@ -4,6 +4,7 @@ let resolveLLMConfig: typeof import('./model-config.js').resolveLLMConfig;
 let resolveEmbeddingConfig: typeof import('./model-config.js').resolveEmbeddingConfig;
 let getDefaultLLMConfig: typeof import('./model-config.js').getDefaultLLMConfig;
 let getDefaultEmbeddingConfig: typeof import('./model-config.js').getDefaultEmbeddingConfig;
+let configDefaults: typeof import('./config.js');
 
 const mockQuery = vi.fn();
 
@@ -23,6 +24,7 @@ process.env.SETTINGS_ENCRYPTION_KEY = 'test-encryption-key-32chars!!!!!!';
 
 beforeAll(async () => {
   ({ resolveLLMConfig, resolveEmbeddingConfig, getDefaultLLMConfig, getDefaultEmbeddingConfig } = await import('./model-config.js'));
+  configDefaults = await import('./config.js');
 });
 
 const sampleModel = {
@@ -111,6 +113,29 @@ describe('resolveEmbeddingConfig', () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const config = await resolveEmbeddingConfig('bad-id', 'user-1');
     expect(config).toBeNull();
+  });
+
+  it('uses built-in defaults when optional embedding fields are null', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        ...embModel,
+        max_embedding_candidates: null,
+        max_retrieved_chunks: null,
+        max_retrieved_chars: null,
+        embedding_batch_size: null,
+        effective_provider: 'openai',
+        effective_base_url: 'https://api.openai.com/v1',
+        effective_api_key_encrypted: 'enc:abcdef:0123456789ab:deadbeef'
+      }]
+    });
+
+    const config = await resolveEmbeddingConfig('emb-2', 'user-1');
+    expect(config).toMatchObject({
+      maxCandidates: configDefaults.DEFAULT_MAX_EMBEDDING_CANDIDATES,
+      maxRetrievedChunks: configDefaults.DEFAULT_MAX_RETRIEVED_CHUNKS,
+      maxRetrievedChars: configDefaults.DEFAULT_MAX_RETRIEVED_CHARS,
+      batchSize: configDefaults.DEFAULT_EMBEDDING_BATCH_SIZE
+    });
   });
 });
 

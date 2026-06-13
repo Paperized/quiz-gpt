@@ -10,7 +10,7 @@ import { QUESTION_TYPES } from './types.js';
 import type { QuestionType, ResponseType } from './types.js';
 import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
-import { config } from './config.js';
+import { ANTHROPIC_API_VERSION } from './config.js';
 import { buildDifficultyPromptGuidance, getDifficultyBand } from './difficulty.js';
 
 const outputSchema = z.object({
@@ -112,7 +112,7 @@ function getModel(cfg: LLMConfig) {
       apiKey: cfg.apiKey,
       baseURL: cfg.baseUrl,
       headers: {
-        'anthropic-version': config.ANTHROPIC_VERSION
+        'anthropic-version': ANTHROPIC_API_VERSION
       }
     });
     return anthropic(cfg.modelId);
@@ -238,7 +238,7 @@ export async function generateQuizFromLLM(
   const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
   progress?.onProgress?.('Retrieving context');
-  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, config, embeddingConfig);
+  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, embeddingConfig);
   const model = getModel(llmConfig);
   logger.info('llm.generate_object.requested', {
     topic: summarizeText(topic),
@@ -343,7 +343,7 @@ export async function proposeGroupQuizFromLLM(
   const difficultyGuidance = buildDifficultyPromptGuidance(settings.difficulty);
 
   progress?.onProgress?.('Retrieving context');
-  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, config, embeddingConfig);
+  const retrievedContext = await buildSourceContext(topic, settingsSummary, sources, embeddingConfig);
   const model = getModel(llmConfig);
 
   const system = [

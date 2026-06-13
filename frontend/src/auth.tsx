@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { req } from './api.js';
 import type { AuthUser, AuthStatus } from './types.js';
 
@@ -23,6 +24,8 @@ const AuthContext = createContext<AuthState>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const isPublicRoute = location.pathname.startsWith('/public/');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<AuthStatus | null>(null);
@@ -39,12 +42,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (isPublicRoute) {
+      setUser(null);
+      setStatus(null);
+      setLoading(false);
+      return;
+    }
+
     // Fetch auth status first (to know if login/register are available)
     req<AuthStatus>('/api/auth/status')
       .then(setStatus)
       .catch(() => {});
     refresh();
-  }, [refresh]);
+  }, [isPublicRoute, refresh]);
 
   const login = useCallback(async (email: string, password: string) => {
     const u = await req<AuthUser>('/api/auth/login', {

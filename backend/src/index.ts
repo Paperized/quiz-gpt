@@ -20,10 +20,11 @@ import { authRoutes } from './routes-auth.js';
 import { userRoutes } from './routes-users.js';
 import { modelRoutes } from './routes-models.js';
 import { providerRoutes } from './routes-providers.js';
-import type { AttemptAnswer, FreeTextEvaluation, QuizQuestion, QuizSettings, LLMConfig, EmbeddingConfig } from './types.js';
+import type { AttemptAnswer, FreeTextEvaluation, QuizQuestion, QuizSettings, EmbeddingConfig } from './types.js';
 import { QUESTION_TYPES } from './types.js';
 
 const app = express();
+export { app };
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
 const asyncRoute = (handler: AsyncHandler) => (req: Request, res: Response, next: NextFunction) => {
   Promise.resolve(handler(req, res, next)).catch(next);
@@ -363,14 +364,7 @@ async function resolveGenerationConfigs(
   let llmConfig = llmModelId ? await resolveLLMConfig(llmModelId, userId) : null;
   if (!llmConfig) llmConfig = await getDefaultLLMConfig(userId);
   if (!llmConfig) {
-    llmConfig = {
-      provider: config.LLM_API_STYLE,
-      baseUrl: config.LLM_BASE_URL,
-      apiKey: config.LLM_API_KEY,
-      modelId: config.LLM_MODEL,
-      maxTokens: config.LLM_MAX_TOKENS,
-      temperature: config.LLM_TEMPERATURE
-    };
+    throw new Error('No LLM model configured for this user');
   }
 
   let embeddingConfig: EmbeddingConfig | null = null;
@@ -1567,11 +1561,12 @@ app.post('/api/attempts', authRequired, asyncRoute(async (req, res) => {
     const freeTextAnswers = normalizedAnswers
       .filter((a) => freeTextQuestions.some((q) => q.id === a.questionId))
       .map((a) => ({ questionId: a.questionId, text: a.freeText ?? '' }));
-    evaluations = await evaluateFreeTextAnswers(llmConfig, freeTextQuestions, freeTextAnswers, {
+    const freeTextEvaluations = await evaluateFreeTextAnswers(llmConfig, freeTextQuestions, freeTextAnswers, {
       title: quiz.rows[0].title,
       topic: quiz.rows[0].topic
     });
-    freeTextScore = evaluations.reduce((sum, e) => sum + e.score, 0);
+    evaluations = freeTextEvaluations;
+    freeTextScore = freeTextEvaluations.reduce((sum, e) => sum + e.score, 0);
   }
 
   const finalScore = score + freeTextScore;
@@ -1612,7 +1607,7 @@ app.post('/api/attempts', authRequired, asyncRoute(async (req, res) => {
 app.get('/api/attempts/:id', authRequired, asyncRoute(async (req, res) => {
   const { id } = req.params;
   const aParams: unknown[] = [id];
-  const aOwnership = userOwnershipClause(req, aParams, 'a.created_by');
+  const aOwnership = userOwnershipClause(req, aParams, 'q.created_by');
   const { rows } = await pool.query(`
     SELECT a.id, a.quiz_id, a.answers, a.score, a.total, a.started_at, a.completed_at, a.evaluations,
            q.title, q.topic, q.settings, q.questions, q.pinned, q.deleted_at
@@ -1658,7 +1653,7 @@ app.get('/api/results/history', authRequired, asyncRoute(async (req, res) => {
   const params: unknown[] = [];
 
   params.push(req.user!.id);
-  conditions.push(`a.created_by = $${params.length}`);
+  conditions.push(`q.created_by = $${params.length}`);
   if (quizName) {
     params.push(`%${quizName}%`);
     conditions.push(`LOWER(q.title) LIKE $${params.length}`);
@@ -1705,7 +1700,11 @@ app.get('/api/results/metrics', authRequired, asyncRoute(async (req, res) => {
       [userId]
     ),
     pool.query(
-      'SELECT quiz_id, score, total, completed_at FROM attempts WHERE created_by = $1 ORDER BY completed_at ASC',
+      `SELECT a.quiz_id, a.score, a.total, a.completed_at
+       FROM attempts a
+       JOIN quizzes q ON q.id = a.quiz_id
+       WHERE q.created_by = $1
+       ORDER BY a.completed_at ASC`,
       [userId]
     )
   ]);
@@ -1901,8 +1900,10 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
   const { answers, startedAt, completedAt } = parsed.data;
 
   const client = await pool.connect();
+  let transactionOpen = false;
   try {
     await client.query('BEGIN');
+    transactionOpen = true;
 
     // Lock the share row to prevent TOCTOU race on max_attempts (H-1)
     // FOR UPDATE cannot be used with GROUP BY, so we lock first, then count separately.
@@ -1951,8 +1952,7 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
     const { score, questionScores } = scoreAttempt(questions, normalizedAnswers, config.MULTI_SELECT_PENALTY_ALPHA);
 
     const freeTextQuestions = questions.filter((q) => q.responseType === 'free_text');
-    let evaluations: FreeTextEvaluation[] | null = null;
-    let freeTextScore = 0;
+    const evaluations: FreeTextEvaluation[] | null = null;
 
     const submittedAt = new Date();
     const id = randomUUID();
@@ -1963,34 +1963,9 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
       RETURNING id, quiz_id, score, total, started_at, completed_at, submitted_at
     `, [id, share.quiz_id, JSON.stringify(normalizedAnswers), score, total, startedAt, completedAt, submittedAt, share.guest_name, share.id, null]);
 
-    await client.query('COMMIT');
-
-    if (freeTextQuestions.length > 0) {
-      const guestLlmConfig: LLMConfig = {
-        provider: config.LLM_API_STYLE,
-        baseUrl: config.LLM_BASE_URL,
-        apiKey: config.LLM_API_KEY,
-        modelId: config.LLM_MODEL,
-        maxTokens: config.LLM_MAX_TOKENS,
-        temperature: config.LLM_TEMPERATURE
-      };
-      const quizInfo = await pool.query('SELECT title, topic FROM quizzes WHERE id = $1', [share.quiz_id]);
-      const freeTextAnswers = normalizedAnswers
-        .filter((a) => freeTextQuestions.some((q) => q.id === a.questionId))
-        .map((a) => ({ questionId: a.questionId, text: a.freeText ?? '' }));
-      evaluations = await evaluateFreeTextAnswers(guestLlmConfig, freeTextQuestions, freeTextAnswers, {
-        title: quizInfo.rows[0].title,
-        topic: quizInfo.rows[0].topic
-      });
-      freeTextScore = evaluations.reduce((sum, e) => sum + e.score, 0);
-      await pool.query('UPDATE attempts SET score = $1, evaluations = $2::jsonb WHERE id = $3', [score + freeTextScore, JSON.stringify(evaluations), id]);
-    }
-
-    const finalScore = score + freeTextScore;
-    logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score: finalScore, total, freeTextCount: freeTextQuestions.length });
-
+    const finalScore = score;
     const a = rows[0];
-    return res.status(201).json({
+    const responsePayload = {
       id: a.id,
       quizId: a.quiz_id,
       score: finalScore,
@@ -2004,15 +1979,24 @@ app.post('/public/api/s/:token/attempt', asyncRoute(async (req, res) => {
         responseType: q.responseType,
         choices: q.choices,
         correctAnswers: q.correctAnswers,
-        explanation: q.explanation,
+        explanation: q.responseType === 'free_text' ? undefined : q.explanation,
         userAnswers: normalizedAnswers[i].selectedAnswers,
         freeTextAnswer: normalizedAnswers[i].freeText ?? null,
         questionScore: questionScores[i]
       })),
       evaluations
-    });
+    };
+
+    await client.query('COMMIT');
+    transactionOpen = false;
+
+    logger.info('guest_attempt_submitted', { shareId: share.id, quizId: share.quiz_id, guestName: share.guest_name, score: finalScore, total, freeTextCount: freeTextQuestions.length });
+
+    return res.status(201).json(responsePayload);
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (transactionOpen) {
+      await client.query('ROLLBACK');
+    }
     throw err;
   } finally {
     client.release();
@@ -2046,43 +2030,29 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   return res.status(500).json({ error: 'Internal server error' });
 });
 
-runMigrations()
-  .then(() => {
-    if (!config.SETTINGS_ENCRYPTION_KEY) {
-      logger.warn('security.encryption_key_missing', {
-        message: 'SETTINGS_ENCRYPTION_KEY is not set — API keys will be stored in plaintext. Generate with: openssl rand -hex 32'
+if (process.env.VITEST !== 'true') {
+  runMigrations()
+    .then(() => {
+      if (!config.SETTINGS_ENCRYPTION_KEY) {
+        logger.warn('security.encryption_key_missing', {
+          message: 'SETTINGS_ENCRYPTION_KEY is not set — API keys will be stored in plaintext. Generate with: openssl rand -hex 32'
+        });
+      }
+      app.listen(config.PORT, () => {
+        logger.info('server_started', {
+          port: config.PORT,
+          publicUrl: config.PUBLIC_URL,
+          nodeEnv: process.env.NODE_ENV ?? 'development',
+          rateLimit: {
+            windowMs: config.RATE_LIMIT_WINDOW_MS,
+            maxRequests: config.RATE_LIMIT_MAX_REQUESTS,
+            generateMaxRequests: config.GENERATE_RATE_LIMIT_MAX_REQUESTS
+          }
+        });
       });
-    }
-    app.listen(config.PORT, () => {
-      logger.info('server_started', {
-        port: config.PORT,
-        publicUrl: config.PUBLIC_URL,
-        nodeEnv: process.env.NODE_ENV ?? 'development',
-        rateLimit: {
-          windowMs: config.RATE_LIMIT_WINDOW_MS,
-          maxRequests: config.RATE_LIMIT_MAX_REQUESTS,
-          generateMaxRequests: config.GENERATE_RATE_LIMIT_MAX_REQUESTS
-        },
-        llm: {
-          style: config.LLM_API_STYLE,
-          baseUrl: config.LLM_BASE_URL,
-          model: config.LLM_MODEL
-        },
-        embeddings: {
-          style: config.EMBEDDING_API_STYLE,
-          baseUrl: config.EMBEDDING_BASE_URL || config.LLM_BASE_URL,
-          model: config.EMBEDDING_MODEL
-        },
-        retrieval: {
-          maxRetrievedChunks: config.MAX_RETRIEVED_CHUNKS,
-          maxRetrievedChars: config.MAX_RETRIEVED_CHARS,
-          maxEmbeddingCandidates: config.MAX_EMBEDDING_CANDIDATES,
-          embeddingBatchSize: config.EMBEDDING_BATCH_SIZE
-        }
-      });
+    })
+    .catch((error) => {
+      logger.error('server_start_failed', error);
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    logger.error('server_start_failed', error);
-    process.exit(1);
-  });
+}

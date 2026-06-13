@@ -21,9 +21,7 @@ import { ProfilePage } from './pages/ProfilePage';
 export function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRouter />
-      </AuthProvider>
+      <AppRouter />
     </BrowserRouter>
   );
 }
@@ -43,30 +41,34 @@ function AppRouter() {
   // Auth pages (no layout wrapper)
   if (location.pathname === '/login' || location.pathname === '/register') {
     return (
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </AuthProvider>
     );
   }
 
   return (
-    <AdminApp>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<ProtectedRoute><CreateQuizPage /></ProtectedRoute>} />
-          <Route path="/group-quiz/new" element={<ProtectedRoute><GroupQuizWizardPage /></ProtectedRoute>} />
-          <Route path="/quiz/:id" element={<ProtectedRoute><QuizPage /></ProtectedRoute>} />
-          <Route path="/review/:attemptId" element={<ProtectedRoute><ReviewPage /></ProtectedRoute>} />
-          <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
-          <Route path="/shares" element={<ProtectedRoute><SharesPage /></ProtectedRoute>} />
-          <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-          <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
-          <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage /></ProtectedRoute>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
-    </AdminApp>
+    <AuthProvider>
+      <AdminApp>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<ProtectedRoute><CreateQuizPage /></ProtectedRoute>} />
+            <Route path="/group-quiz/new" element={<ProtectedRoute><GroupQuizWizardPage /></ProtectedRoute>} />
+            <Route path="/quiz/:id" element={<ProtectedRoute><QuizPage /></ProtectedRoute>} />
+            <Route path="/review/:attemptId" element={<ProtectedRoute><ReviewPage /></ProtectedRoute>} />
+            <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
+            <Route path="/shares" element={<ProtectedRoute><SharesPage /></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+            <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
+            <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage /></ProtectedRoute>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      </AdminApp>
+    </AuthProvider>
   );
 }

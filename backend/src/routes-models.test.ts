@@ -7,8 +7,7 @@ const decryptValueMock = vi.fn(() => 'plain-secret');
 const maskSecretMock = vi.fn(() => '••••••••');
 
 const configMock = {
-  SETTINGS_ENCRYPTION_KEY: 'enc-key',
-  ANTHROPIC_VERSION: '2023-06-01'
+  SETTINGS_ENCRYPTION_KEY: 'enc-key'
 };
 
 vi.mock('./db.js', () => ({
@@ -18,7 +17,8 @@ vi.mock('./db.js', () => ({
 }));
 
 vi.mock('./config.js', () => ({
-  config: configMock
+  config: configMock,
+  ANTHROPIC_API_VERSION: '2023-06-01'
 }));
 
 vi.mock('./logger.js', () => ({

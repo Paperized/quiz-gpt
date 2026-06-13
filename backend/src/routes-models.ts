@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from './db.js';
-import { config } from './config.js';
+import { ANTHROPIC_API_VERSION, config } from './config.js';
 import { logger } from './logger.js';
 import { authRequired, requireAdmin, isAdminUser } from './auth.js';
 import { encryptValue, decryptValue, maskSecret } from './encryption.js';
@@ -505,7 +505,7 @@ modelRoutes.post('/:id/test', async (req, res) => {
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
-            'anthropic-version': config.ANTHROPIC_VERSION,
+            'anthropic-version': ANTHROPIC_API_VERSION,
             Authorization: `Bearer ${apiKey}`
           },
           body: JSON.stringify({ model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })
@@ -531,7 +531,7 @@ modelRoutes.post('/:id/test', async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(effectiveProvider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': config.ANTHROPIC_VERSION } : {}),
+        ...(effectiveProvider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_API_VERSION } : {}),
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({ model: modelId, input: ['test'] })
@@ -573,7 +573,7 @@ modelRoutes.post('/test', async (req, res) => {
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
-            'anthropic-version': config.ANTHROPIC_VERSION,
+            'anthropic-version': ANTHROPIC_API_VERSION,
             Authorization: `Bearer ${apiKey}`
           },
           body: JSON.stringify({ model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })
@@ -600,7 +600,7 @@ modelRoutes.post('/test', async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(provider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': config.ANTHROPIC_VERSION } : {}),
+        ...(provider === 'anthropic' ? { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_API_VERSION } : {}),
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({ model: modelId, input: ['test'] })
