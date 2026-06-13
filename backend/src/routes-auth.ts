@@ -246,6 +246,7 @@ authRoutes.get('/me', authRequired, async (req, res) => {
       name: u.name,
       role: u.role,
       authProvider: u.auth_provider,
+      encryptionConfigured: Boolean(config.SETTINGS_ENCRYPTION_KEY),
       createdAt: u.created_at,
       updatedAt: u.updated_at,
     });

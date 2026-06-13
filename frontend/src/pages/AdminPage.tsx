@@ -116,6 +116,11 @@ export function AdminPage() {
     <>
       <header className="flex items-center justify-between h-16 px-6 border-b border-border-subtle z-10 shrink-0" style={{ backgroundColor: '#141313' }}>
         <h2 className="text-[14px] font-semibold text-on-surface font-geist">Admin</h2>
+        {user && (
+          <span className="flex items-center gap-1 cursor-default" title={user.encryptionConfigured ? 'API keys encrypted' : 'Encryption key not set — API keys stored in plaintext'}>
+            <Icon name="lock" size={14} fill={user.encryptionConfigured} className={user.encryptionConfigured ? 'text-green-400' : 'text-yellow-500'} />
+          </span>
+        )}
       </header>
 
       <div className="flex-1 overflow-y-auto p-6" style={{ backgroundColor: '#141313' }}>

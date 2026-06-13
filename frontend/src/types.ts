@@ -216,6 +216,7 @@ export interface AuthUser {
   name: string | null;
   role: UserRole;
   authProvider: 'oidc' | 'email';
+  encryptionConfigured: boolean;
   createdAt?: string;
   updatedAt?: string;
 }

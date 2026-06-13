@@ -60,7 +60,7 @@ function buildHeaders(style: RuntimeEmbeddingStyle, apiKey: string, anthropicVer
   };
 }
 
-function normalizeProvider(provider: string): RuntimeEmbeddingStyle {
+export function normalizeProvider(provider: string): RuntimeEmbeddingStyle {
   const lower = provider.toLowerCase();
   if (lower === 'anthropic') return 'anthropic';
   if (lower === 'openai') return 'openai';
