@@ -21,6 +21,8 @@ export function ModelsPage() {
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [detailModel, setDetailModel] = useState<Model | null>(null);
   const [detailProv, setDetailProv] = useState<Provider | null>(null);
+  const [editProv, setEditProv] = useState<Provider | null>(null);
+  const [showCreateProv, setShowCreateProv] = useState(false);
   const [testStatus, setTestStatus] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
 
   const isAdmin = user?.role !== 'user';
@@ -90,7 +92,7 @@ export function ModelsPage() {
             <>
               <div className="flex items-center justify-between">
                 <h3 className="text-[11px] font-bold text-text-muted uppercase tracking-[0.1em]">Providers</h3>
-                <button onClick={() => { const l = prompt('Label:'); const p = prompt('Provider:'); const u = prompt('Base URL (optional):'); const k = prompt('API Key:'); if (l && p && k) req('/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: l, provider: p, apiKey: k, baseUrl: u || undefined }) }).then(() => fetchProviders()); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-on-primary text-[12px] font-medium hover:opacity-90 transition-opacity"><Icon name="add" size={14} />New Provider</button>
+                <button onClick={() => setShowCreateProv(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-on-primary text-[12px] font-medium hover:opacity-90 transition-opacity"><Icon name="add" size={14} />New Provider</button>
               </div>
               {provError && <div className="bg-error-container border border-error/30 rounded-lg p-3 text-[14px] text-on-error-container">{provError}</div>}
               {provLoading ? <div className="flex items-center justify-center h-64"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div> : <>
@@ -151,7 +153,9 @@ export function ModelsPage() {
       {createType && <ModelFormSimple modelType={createType} providers={providers} onClose={() => setCreateType(null)} onSaved={() => { fetchModels(); setCreateType(null); }} />}
       {editModel && <ModelFormSimple modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editModel.id]; return ns; }); fetchModels(); setEditModel(null); }} />}
       {detailModel && <ModelDetailSimple model={detailModel} onClose={() => setDetailModel(null)} onEdit={detailModel.isSystem ? undefined : () => { setDetailModel(null); setEditModel(detailModel); }} />}
-      {detailProv && <ProviderDetailSimple provider={detailProv} onClose={() => setDetailProv(null)} />}
+      {detailProv && <ProviderDetailSimple provider={detailProv} onClose={() => setDetailProv(null)} onEdit={detailProv.isSystem ? undefined : () => { setDetailProv(null); setEditProv(detailProv); }} />}
+      {showCreateProv && <ProviderFormSimple onClose={() => setShowCreateProv(false)} onSaved={() => { fetchProviders(); setShowCreateProv(false); }} />}
+      {editProv && <ProviderFormSimple edit={editProv} onClose={() => setEditProv(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editProv.id]; return ns; }); fetchProviders(); setEditProv(null); }} />}
     </>
   );
 }
@@ -296,7 +300,86 @@ function ModelFormSimple({ modelType, edit, providers, onClose, onSaved }: { mod
   );
 }
 
-function ProviderDetailSimple({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+function ProviderFormSimple({ edit, onClose, onSaved }: { edit?: Provider; onClose: () => void; onSaved: () => void }) {
+  const [label, setLabel] = useState(edit?.label ?? '');
+  const [provider, setProvider] = useState(edit?.provider ?? '');
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState(edit?.baseUrl ?? '');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function handleTestConnection() {
+    if (!provider || !apiKey) { setTestResult({ ok: false, msg: 'Provider and API Key required' }); return; }
+    setTesting(true); setTestResult(null);
+    try {
+      const body: Record<string, unknown> = { provider, apiKey };
+      if (baseUrl) body.baseUrl = baseUrl;
+      const res = await req<{ ok: boolean; error?: string }>('/api/providers/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      setTestResult(res.ok ? { ok: true, msg: 'Connected' } : { ok: false, msg: res.error ?? 'Connection failed' });
+    } catch (err) {
+      setTestResult({ ok: false, msg: err instanceof Error ? err.message : 'Connection failed' });
+    } finally { setTesting(false); }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault(); setError(''); setSubmitting(true);
+    try {
+      const body: Record<string, unknown> = { label, provider, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined };
+      if (edit) {
+        await req(`/api/providers/${edit.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      } else {
+        await req('/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      }
+      onSaved(); onClose();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed'); }
+    finally { setSubmitting(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl w-full max-w-md flex flex-col overflow-hidden" style={{ maxHeight: '60vh' }}>
+        <div className="px-6 pt-6 pb-3 shrink-0">
+          <div className="flex items-center justify-between">
+            <h3 className="text-[16px] font-bold text-on-surface">{edit ? 'Edit Provider' : 'New Provider'}</h3>
+            <button onClick={onClose} className="text-text-muted hover:text-on-surface"><Icon name="close" size={18} /></button>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-3 flex flex-col gap-3">
+            <input type="text" placeholder="Label (e.g. Company LiteLLM)" value={label} onChange={e => setLabel(e.target.value)} required className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            <select value={provider} onChange={e => setProvider(e.target.value)} required disabled={!!edit} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface appearance-none focus:outline-none focus:border-primary disabled:opacity-60">
+              <option value="">Select provider...</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+              <option value="openai_compatible">openai_compatible</option>
+            </select>
+            <input type="text" placeholder="Base URL (optional)" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+            <input type="password" placeholder={edit ? 'New API Key (leave empty to keep)' : 'API Key'} value={apiKey} onChange={e => setApiKey(e.target.value)} required={!edit} autoComplete="off" data-form-type="other" className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
+          </div>
+          {(error || testResult) && (
+            <p className={`shrink-0 px-6 text-[12px] ${error || !testResult?.ok ? 'text-error' : 'text-green-400'}`}>
+              {error ? `✗ ${error}` : `${testResult!.ok ? '✓' : '✗'} ${testResult!.msg}`}
+            </p>
+          )}
+          <div className="shrink-0 px-6 py-4 border-t border-border-subtle flex gap-3">
+            {!edit && (
+              <button type="button" disabled={testing} onClick={handleTestConnection} className="py-2 rounded-lg border border-border-subtle text-[12px] text-text-muted hover:border-secondary hover:text-secondary transition-colors disabled:opacity-50" style={{ flex: '0 0 25%' }}>
+                {testing ? 'Testing...' : 'Test'}
+              </button>
+            )}
+            <button type="submit" disabled={submitting} className="flex-1 py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity disabled:opacity-50">{submitting ? 'Saving...' : edit ? 'Save Changes' : 'Create Provider'}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ProviderDetailSimple({ provider, onClose, onEdit }: { provider: Provider; onClose: () => void; onEdit?: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-surface-container rounded-xl border border-border-subtle shadow-xl p-6 w-full max-w-md">
@@ -310,7 +393,10 @@ function ProviderDetailSimple({ provider, onClose }: { provider: Provider; onClo
           {provider.baseUrl && <div><span className="text-text-muted">Base URL: </span><span className="text-on-surface">{provider.baseUrl}</span></div>}
           {provider.isSystem && <div><span className="text-text-muted">System provider</span></div>}
         </div>
-        <button onClick={onClose} className="mt-6 w-full py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity">Close</button>
+        <div className="flex gap-2 mt-6">
+          {onEdit && <button onClick={onEdit} className="flex-1 py-2 rounded-lg border border-border-subtle text-[13px] font-medium text-text-muted hover:border-secondary hover:text-secondary transition-colors">Edit</button>}
+          <button onClick={onClose} className={`${onEdit ? 'flex-1' : 'w-full'} py-2 rounded-lg bg-primary text-on-primary text-[13px] font-medium hover:opacity-90 transition-opacity`}>Close</button>
+        </div>
       </div>
     </div>
   );

@@ -606,11 +606,10 @@ function ModelForm({ modelType, edit, providers, onClose, onSaved }: { modelType
               <input type="number" placeholder="Embedding Batch Size (default 64)" value={batchSize} onChange={e => setBatchSize(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
             </>)}
 
-            {error && <p className="text-error text-[12px]">{error}</p>}
           </div>
-          {testResult && (
-            <p className={`shrink-0 px-6 text-[12px] ${testResult.ok ? 'text-green-400' : 'text-error'}`}>
-              {testResult.ok ? '✓' : '✗'} {testResult.msg}
+          {(error || testResult) && (
+            <p className={`shrink-0 px-6 text-[12px] ${error || !testResult?.ok ? 'text-error' : 'text-green-400'}`}>
+              {error ? `✗ ${error}` : `${testResult!.ok ? '✓' : '✗'} ${testResult!.msg}`}
             </p>
           )}
           <div className="shrink-0 px-6 py-4 border-t border-border-subtle flex gap-3">
@@ -694,11 +693,10 @@ function ProviderForm({ edit, onClose, onSaved }: { edit?: Provider; onClose: ()
             <input type="text" placeholder="Base URL (optional)" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
             <input type="password" placeholder={edit ? 'New API Key (leave empty to keep)' : 'API Key'} value={apiKey} onChange={e => setApiKey(e.target.value)} required={!edit} autoComplete="off" data-form-type="other" className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-surface text-[13px] text-on-surface placeholder:text-text-muted focus:outline-none focus:border-primary" />
             <label className="flex items-center gap-2 text-[12px] text-text-muted cursor-pointer"><input type="checkbox" checked={isSystem} onChange={e => setIsSystem(e.target.checked)} />System provider</label>
-            {error && <p className="text-error text-[12px]">{error}</p>}
           </div>
-          {testResult && (
-            <p className={`shrink-0 px-6 text-[12px] ${testResult.ok ? 'text-green-400' : 'text-error'}`}>
-              {testResult.ok ? '✓' : '✗'} {testResult.msg}
+          {(error || testResult) && (
+            <p className={`shrink-0 px-6 text-[12px] ${error || !testResult?.ok ? 'text-error' : 'text-green-400'}`}>
+              {error ? `✗ ${error}` : `${testResult!.ok ? '✓' : '✗'} ${testResult!.msg}`}
             </p>
           )}
           <div className="shrink-0 px-6 py-4 border-t border-border-subtle flex gap-3">
