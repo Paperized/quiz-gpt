@@ -61,6 +61,16 @@ vi.mock('./auth.js', () => ({
   isAdminUser: (req: express.Request) => req.user?.role === 'admin' || req.user?.role === 'super_admin'
 }));
 
+const validateBaseUrlForSSRFMock = vi.fn().mockResolvedValue({ safe: true });
+const secureFetchMock = vi.fn((input: RequestInfo, init?: RequestInit) => {
+  return fetch(input, { ...init, redirect: 'error' });
+});
+
+vi.mock('./ip-check.js', () => ({
+  validateBaseUrlForSSRF: validateBaseUrlForSSRFMock,
+  secureFetch: secureFetchMock,
+}));
+
 let providerRoutes: typeof import('./routes-providers.js').providerRoutes;
 
 type MockResponse = {
@@ -292,6 +302,69 @@ describe('providerRoutes', () => {
     expect(response.body).toEqual({ error: 'Only system providers' });
   });
 
+  it('revokes access and deletes user private models backed by the provider', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{ is_system: true }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/provider-1/access/user-2', {
+      method: 'DELETE',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      }
+    });
+
+    expect(response.status).toBe(204);
+    expect(queryMock.mock.calls[1][0]).toContain('DELETE FROM provider_access');
+    expect(queryMock.mock.calls[2][0]).toContain('DELETE FROM models WHERE provider_id');
+    expect(queryMock.mock.calls[2][0]).toContain('is_system = false');
+    expect(queryMock.mock.calls[2][1][1]).toBe('user-2');
+  });
+
+  it('revoke does not delete system models backed by the provider', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{ is_system: true }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/provider-1/access/user-2', {
+      method: 'DELETE',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      }
+    });
+
+    expect(response.status).toBe(204);
+    // The models DELETE must target is_system = false
+    const modelsDeleteCall = queryMock.mock.calls[2][0] as string;
+    expect(modelsDeleteCall).toContain('is_system = false');
+    expect(modelsDeleteCall).not.toContain('is_system = true');
+  });
+
+  it('revoke access rejects non-system providers', async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [{ is_system: false }]
+    });
+
+    const response = await request('/provider-1/access/user-2', {
+      method: 'DELETE',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Only system providers' });
+  });
+
   it('prevents non-owners from deleting a private provider', async () => {
     queryMock.mockResolvedValueOnce({
       rows: [{
@@ -312,16 +385,18 @@ describe('providerRoutes', () => {
     expect(response.body).toEqual({ error: 'Not authorized' });
   });
 
-  it('revokes access from a system provider', async () => {
+  it('cascade-deletes linked models when a system provider is deleted', async () => {
     queryMock
       .mockResolvedValueOnce({
         rows: [{
+          created_by: 'admin-1',
           is_system: true
         }]
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
-    const response = await request('/provider-1/access/user-2', {
+    const response = await request('/provider-1', {
       method: 'DELETE',
       headers: {
         'x-user-id': 'admin-1',
@@ -330,16 +405,271 @@ describe('providerRoutes', () => {
     });
 
     expect(response.status).toBe(204);
-    expect(queryMock.mock.calls[1][0]).toContain('DELETE FROM provider_access');
+    expect(queryMock.mock.calls[1][0]).toContain('DELETE FROM models WHERE provider_id');
+    expect(queryMock.mock.calls[2][0]).toContain('DELETE FROM providers');
   });
 
-  it('tests provider connectivity through the real route', async () => {
+  it('cascade-deletes linked models when owner deletes their private provider', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          created_by: 'user-1',
+          is_system: false
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/provider-1', {
+      method: 'DELETE',
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      }
+    });
+
+    expect(response.status).toBe(204);
+    expect(queryMock.mock.calls[1][0]).toContain('DELETE FROM models WHERE provider_id');
+    expect(queryMock.mock.calls[2][0]).toContain('DELETE FROM providers');
+  });
+
+  it('deletes linked models when downgrading system provider to non-system', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          created_by: 'admin-1',
+          is_system: true
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/provider-1', {
+      method: 'PATCH',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      },
+      body: {
+        isSystem: false
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(queryMock.mock.calls[1][0]).toContain('DELETE FROM models WHERE provider_id');
+    expect(queryMock.mock.calls[2][0]).toContain('UPDATE providers SET');
+    expect(queryMock.mock.calls[2][0]).toContain('is_system = $1');
+  });
+
+  it('does not delete linked models when upgrading non-system to system', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          created_by: 'admin-1',
+          is_system: false
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/provider-1', {
+      method: 'PATCH',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      },
+      body: {
+        isSystem: true
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    // No DELETE FROM models call — only the UPDATE
+    const calls = queryMock.mock.calls.map((c: string[]) => c[0]);
+    const deleteModelCalls = calls.filter((c: string) => c.includes('DELETE FROM models'));
+    expect(deleteModelCalls).toHaveLength(0);
+  });
+
+  it('blocks non-admin from creating provider with private IP baseUrl', async () => {
+    validateBaseUrlForSSRFMock.mockResolvedValueOnce({ safe: false, reason: 'Cannot use private/internal IP addresses' });
+
+    const response = await request('/', {
+      method: 'POST',
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      },
+      body: {
+        label: 'Private provider',
+        provider: 'openai',
+        apiKey: 'sk-test',
+        baseUrl: 'https://10.0.0.1/v1'
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Cannot use private/internal IP addresses' });
+    expect(validateBaseUrlForSSRFMock).toHaveBeenCalledWith('https://10.0.0.1/v1');
+  });
+
+  it('allows admin to create provider with private IP baseUrl', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'provider-1',
+          label: 'My provider',
+          provider: 'openai',
+          base_url: 'https://10.0.0.1/v1',
+          api_key_encrypted: 'ciphertext',
+          created_by: 'admin-1',
+          is_system: true,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z'
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/', {
+      method: 'POST',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      },
+      body: {
+        label: 'Admin provider',
+        provider: 'openai',
+        apiKey: 'sk-test',
+        baseUrl: 'https://10.0.0.1/v1',
+        isSystem: true
+      }
+    });
+
+    expect(response.status).toBe(201);
+  });
+
+  it('blocks non-admin from updating private provider baseUrl to private IP', async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [{
+        created_by: 'user-1',
+        is_system: false
+      }]
+    });
+    validateBaseUrlForSSRFMock.mockResolvedValueOnce({ safe: false, reason: 'Cannot use private/internal IP addresses' });
+
+    const response = await request('/provider-1', {
+      method: 'PATCH',
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      },
+      body: {
+        baseUrl: 'https://192.168.1.1/v1'
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Cannot use private/internal IP addresses' });
+  });
+
+  it('allows non-admin to update system provider baseUrl (skip SSRF for system)', async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          created_by: 'admin-1',
+          is_system: true
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request('/provider-sys', {
+      method: 'PATCH',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      },
+      body: {
+        baseUrl: 'https://10.0.0.1/v1'
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(validateBaseUrlForSSRFMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks non-admin from testing provider with private baseUrl', async () => {
+    validateBaseUrlForSSRFMock.mockResolvedValueOnce({ safe: false, reason: 'Cannot use private/internal IP addresses' });
+
+    const response = await request('/test', {
+      method: 'POST',
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      },
+      body: {
+        provider: 'openai',
+        apiKey: 'sk-test',
+        baseUrl: 'https://10.0.0.1/v1'
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Cannot use private/internal IP addresses' });
+  });
+
+  it('allows admin to test provider with private baseUrl', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => ''
     });
     vi.stubGlobal('fetch', fetchMock);
+
+    const response = await request('/test', {
+      method: 'POST',
+      headers: {
+        'x-user-id': 'admin-1',
+        'x-user-role': 'admin'
+      },
+      body: {
+        provider: 'openai',
+        apiKey: 'sk-test',
+        baseUrl: 'https://10.0.0.1/v1'
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+  });
+
+  it('uses secureFetch with redirect:error in provider test', async () => {
+    secureFetchMock.mockClear();
+    const mockResponse = { ok: true, status: 200, text: async () => '' } as unknown as Response;
+    secureFetchMock.mockResolvedValueOnce(mockResponse);
+
+    const response = await request('/test', {
+      method: 'POST',
+      headers: {
+        'x-user-id': 'user-1',
+        'x-user-role': 'user'
+      },
+      body: {
+        provider: 'openai',
+        apiKey: 'sk-test'
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(secureFetchMock).toHaveBeenCalled();
+    const callUrl = secureFetchMock.mock.calls[0][0] as string;
+    expect(callUrl).toContain('api.openai.com');
+  });
+
+  it('tests provider connectivity through the real route', async () => {
+    secureFetchMock.mockClear();
+    const mockResponse = { ok: true, status: 200, text: async () => '' } as unknown as Response;
+    secureFetchMock.mockResolvedValueOnce(mockResponse);
 
     const response = await request('/test', {
       method: 'POST',
@@ -355,7 +685,7 @@ describe('providerRoutes', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(secureFetchMock).toHaveBeenCalledWith(
       'https://api.openai.com/v1/models',
       expect.objectContaining({
         headers: expect.objectContaining({

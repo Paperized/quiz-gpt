@@ -1,6 +1,7 @@
 import { ANTHROPIC_API_VERSION, DEFAULT_EMBEDDING_BATCH_SIZE } from './config.js';
 import { logger } from './logger.js';
 import type { EmbeddingConfig } from './types.js';
+import { secureFetch } from './ip-check.js';
 
 type RuntimeEmbeddingStyle = 'openai' | 'anthropic' | 'openai_compatible';
 
@@ -74,7 +75,7 @@ async function requestEmbeddingsDirect(
     inputs: values.length
   });
 
-  const response = await fetch(endpoint, {
+  const response = await secureFetch(endpoint, {
     method: 'POST',
     headers: buildHeaders(style, apiKey, anthropicVersion),
     body: JSON.stringify({

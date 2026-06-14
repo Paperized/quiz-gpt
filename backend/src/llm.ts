@@ -12,6 +12,7 @@ import type { SourceInputs } from './context.js';
 import { buildSourceContext } from './context.js';
 import { ANTHROPIC_API_VERSION } from './config.js';
 import { buildDifficultyPromptGuidance, getDifficultyBand } from './difficulty.js';
+import { secureFetch } from './ip-check.js';
 
 const outputSchema = z.object({
   title: z.string().min(3),
@@ -111,6 +112,7 @@ function getModel(cfg: LLMConfig) {
     const anthropic = createAnthropic({
       apiKey: cfg.apiKey,
       baseURL: cfg.baseUrl,
+      fetch: secureFetch,
       headers: {
         'anthropic-version': ANTHROPIC_API_VERSION
       }
@@ -122,14 +124,16 @@ function getModel(cfg: LLMConfig) {
     const provider = createOpenAICompatible({
       name: 'compatible',
       apiKey: cfg.apiKey,
-      baseURL: cfg.baseUrl
+      baseURL: cfg.baseUrl,
+      fetch: secureFetch
     });
     return provider(cfg.modelId);
   }
 
   const openai = createOpenAI({
     apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl
+    baseURL: cfg.baseUrl,
+    fetch: secureFetch
   });
   return openai(cfg.modelId);
 }

@@ -5,6 +5,7 @@ import { ANTHROPIC_API_VERSION, config } from './config.js';
 import { logger } from './logger.js';
 import { authRequired, requireAdmin, isAdminUser } from './auth.js';
 import { encryptValue, decryptValue, maskSecret } from './encryption.js';
+import { validateBaseUrlForSSRF, secureFetch } from './ip-check.js';
 
 export const modelRoutes = Router();
 modelRoutes.use(authRequired);
@@ -195,18 +196,24 @@ modelRoutes.post('/', async (req, res) => {
     let resolvedBaseUrl: string | null = null;
 
     if (providerId) {
-      // Verify provider exists and user has access
       const { rows: provs } = await pool.query<{ provider: string; base_url: string | null; is_system: boolean }>(
         'SELECT provider, base_url, is_system FROM providers WHERE id = $1', [providerId]
       );
       if (provs.length === 0) { res.status(404).json({ error: 'Provider not found' }); return; }
       resolvedProvider = provs[0].provider;
       resolvedBaseUrl = provs[0].base_url;
-      // Don't store apiKey on model - it comes from the provider at query time
+      if (resolvedBaseUrl && !adm && !provs[0].is_system) {
+        const ssrf = await validateBaseUrlForSSRF(resolvedBaseUrl);
+        if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+      }
     } else {
       if (!provider || !apiKey) { res.status(400).json({ error: 'provider and apiKey required in manual mode' }); return; }
       resolvedProvider = provider;
       resolvedBaseUrl = baseUrl ?? null;
+      if (resolvedBaseUrl && !adm) {
+        const ssrf = await validateBaseUrlForSSRF(resolvedBaseUrl);
+        if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+      }
       encrypted = encryptValue(apiKey, encryptionKey);
     }
 
@@ -243,8 +250,10 @@ modelRoutes.patch('/:id', async (req, res) => {
     }
 
     const { id } = req.params;
-    const { rows: existing } = await pool.query<{ created_by: string; is_system: boolean }>(
-      'SELECT created_by, is_system FROM models WHERE id = $1', [id]
+    const { rows: existing } = await pool.query<{ created_by: string; is_system: boolean; provider_id: string | null; provider_is_system: boolean | null }>(
+      `SELECT m.created_by, m.is_system, m.provider_id, p.is_system AS provider_is_system
+       FROM models m LEFT JOIN providers p ON m.provider_id = p.id
+       WHERE m.id = $1`, [id]
     );
     if (existing.length === 0) {
       res.status(404).json({ error: 'Model not found' });
@@ -277,7 +286,14 @@ modelRoutes.patch('/:id', async (req, res) => {
     if (body.data.label !== undefined) set('label', body.data.label);
     if (body.data.provider !== undefined) set('provider', body.data.provider);
     if (body.data.modelId !== undefined) set('model_id', body.data.modelId);
-    if (body.data.baseUrl !== undefined) set('base_url', body.data.baseUrl);
+    if (body.data.baseUrl !== undefined) {
+      const isSystemResource = model.is_system || (model.provider_id && model.provider_is_system);
+      if (!adm && !isSystemResource) {
+        const ssrf = await validateBaseUrlForSSRF(body.data.baseUrl);
+        if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+      }
+      set('base_url', body.data.baseUrl);
+    }
     if (body.data.maxTokens !== undefined) set('max_tokens', body.data.maxTokens);
     if (body.data.temperature !== undefined) set('temperature', body.data.temperature);
     if (body.data.maxRetrievedChunks !== undefined) set('max_retrieved_chunks', body.data.maxRetrievedChunks);
@@ -472,7 +488,7 @@ modelRoutes.post('/:id/test', async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT m.*,
-        p.provider AS p_provider, p.base_url AS p_base_url, p.api_key_encrypted AS p_api_key_encrypted
+        p.provider AS p_provider, p.base_url AS p_base_url, p.api_key_encrypted AS p_api_key_encrypted, p.is_system AS p_is_system
        FROM models m
        LEFT JOIN providers p ON m.provider_id = p.id
        WHERE m.id = $1`, [id]
@@ -497,10 +513,16 @@ modelRoutes.post('/:id/test', async (req, res) => {
     const modelId = m.model_id as string;
     const modelType = m.model_type as string;
     const resolved = effectiveBaseUrl.replace(/\/$/, '') || (effectiveProvider === 'openai' ? 'https://api.openai.com/v1' : effectiveProvider === 'anthropic' ? 'https://api.anthropic.com/v1' : '');
+    const isSystemResource = (m.is_system as boolean) || (m.provider_id && (m.p_is_system as boolean));
+    const adm = isAdminUser(req);
+    if (resolved && !adm && !isSystemResource) {
+      const ssrf = await validateBaseUrlForSSRF(resolved);
+      if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+    }
 
     if (modelType === 'llm') {
       if (effectiveProvider === 'anthropic') {
-        const resp = await fetch(`${resolved}/messages`, {
+        const resp = await secureFetch(`${resolved}/messages`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -515,7 +537,7 @@ modelRoutes.post('/:id/test', async (req, res) => {
         return res.json({ ok: false, error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` });
       }
       const endpoint = resolved.endsWith('/v1') ? `${resolved}/chat/completions` : `${resolved}/v1/chat/completions`;
-      const resp = await fetch(endpoint, {
+      const resp = await secureFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
@@ -527,7 +549,7 @@ modelRoutes.post('/:id/test', async (req, res) => {
 
     // embedding
     const endpoint = resolved.endsWith('/v1') ? `${resolved}/embeddings` : `${resolved}/v1/embeddings`;
-    const resp = await fetch(endpoint, {
+    const resp = await secureFetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -550,25 +572,31 @@ modelRoutes.post('/test', async (req, res) => {
     const body = modelTestSchema.safeParse(req.body);
     if (!body.success) { res.status(400).json({ error: 'Invalid input', details: body.error.flatten() }); return; }
     let { provider, baseUrl, apiKey, modelId, modelType } = body.data;
+    let provIsSystem = false;
 
-    // If providerId is given, resolve config from DB
     if (body.data.providerId) {
-      const { rows } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
-        'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [body.data.providerId]
+      const { rows } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string; is_system: boolean }>(
+        'SELECT provider, base_url, api_key_encrypted, is_system FROM providers WHERE id = $1', [body.data.providerId]
       );
       if (rows.length === 0) { res.status(404).json({ error: 'Provider not found' }); return; }
       provider = rows[0].provider as typeof provider;
       baseUrl = rows[0].base_url ?? undefined;
+      provIsSystem = rows[0].is_system;
       const key = config.SETTINGS_ENCRYPTION_KEY;
       apiKey = key ? decryptValue(rows[0].api_key_encrypted, key) : '';
     }
 
     if (!provider || !apiKey) { res.status(400).json({ error: 'provider and apiKey are required' }); return; }
     const resolved = ((baseUrl || '').replace(/\/$/, '') || (provider === 'openai' ? 'https://api.openai.com/v1' : provider === 'anthropic' ? 'https://api.anthropic.com/v1' : ''));
+    const adm = isAdminUser(req);
+    if (resolved && !adm && !provIsSystem) {
+      const ssrf = await validateBaseUrlForSSRF(resolved);
+      if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+    }
 
     if (modelType === 'llm') {
       if (provider === 'anthropic') {
-        const resp = await fetch(`${resolved}/messages`, {
+        const resp = await secureFetch(`${resolved}/messages`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -584,7 +612,7 @@ modelRoutes.post('/test', async (req, res) => {
       }
       // openai / openai_compatible
       const endpoint = resolved.endsWith('/v1') ? `${resolved}/chat/completions` : `${resolved}/v1/chat/completions`;
-      const resp = await fetch(endpoint, {
+      const resp = await secureFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
@@ -596,7 +624,7 @@ modelRoutes.post('/test', async (req, res) => {
 
     // embedding
     const endpoint = resolved.endsWith('/v1') ? `${resolved}/embeddings` : `${resolved}/v1/embeddings`;
-    const resp = await fetch(endpoint, {
+    const resp = await secureFetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

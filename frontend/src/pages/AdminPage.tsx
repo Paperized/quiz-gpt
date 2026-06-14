@@ -21,6 +21,7 @@ export function AdminPage() {
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [detailModel, setDetailModel] = useState<Model | null>(null);
   const [showAccessModel, setShowAccessModel] = useState<Model | null>(null);
+  const [showAccessProvider, setShowAccessProvider] = useState<Provider | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
 
   // Providers state
@@ -115,7 +116,7 @@ export function AdminPage() {
     catch (err) { alert(err instanceof Error ? err.message : 'Revoke failed'); }
   }
 
-  // Wrappers that also update the AccessPanel model snapshot
+  // Model access wrapper — optimistic update for AccessPanel
   function handleAccessGrant(userId: string) {
     if (!showAccessModel) return;
     const assigned = showAccessModel.assignedTo ?? [];
@@ -128,6 +129,31 @@ export function AdminPage() {
     const assigned = (showAccessModel.assignedTo ?? []).filter((id) => id !== userId);
     setShowAccessModel({ ...showAccessModel, assignedTo: assigned });
     handleRevoke(showAccessModel.id, userId);
+  }
+
+  // Provider access
+  async function handleProviderGrant(providerId: string, userId: string) {
+    try { await req(`/api/providers/${providerId}/access`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) }); await fetchProviders(); }
+    catch (err) { alert(err instanceof Error ? err.message : 'Grant failed'); }
+  }
+
+  async function handleProviderRevoke(providerId: string, userId: string) {
+    try { await req(`/api/providers/${providerId}/access/${userId}`, { method: 'DELETE' }); await fetchProviders(); }
+    catch (err) { alert(err instanceof Error ? err.message : 'Revoke failed'); }
+  }
+
+  function handleProviderAccessGrant(userId: string) {
+    if (!showAccessProvider) return;
+    const assigned = showAccessProvider.assignedTo ?? [];
+    setShowAccessProvider({ ...showAccessProvider, assignedTo: [...assigned, userId] });
+    handleProviderGrant(showAccessProvider.id, userId);
+  }
+
+  function handleProviderAccessRevoke(userId: string) {
+    if (!showAccessProvider) return;
+    const assigned = (showAccessProvider.assignedTo ?? []).filter((id) => id !== userId);
+    setShowAccessProvider({ ...showAccessProvider, assignedTo: assigned });
+    handleProviderRevoke(showAccessProvider.id, userId);
   }
 
   const systemModels = models.filter(m => m.isSystem);
@@ -207,7 +233,8 @@ export function AdminPage() {
                           <button onClick={() => handleTestProvider(p)} className={`transition-colors p-1 ${testStatus[p.id] === 'ok' ? 'text-green-400' : testStatus[p.id] === 'error' ? 'text-red-400 hover:text-red-500' : 'text-text-muted hover:text-green-400'}`}><Icon name="bolt" size={12} /></button>
                         )}
                         <button onClick={() => setDetailProv(p)} className="text-text-muted hover:text-on-surface transition-colors p-1"><Icon name="search" size={14} /></button>
-                        <button onClick={async () => { if (!confirm(`Delete "${p.label}"?`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
+                        {p.isSystem && isAdmin && <button onClick={() => setShowAccessProvider(p)} className="text-text-muted hover:text-primary transition-colors p-1" title="Access"><Icon name="group" size={14} /></button>}
+                        <button onClick={async () => { if (!confirm(`Delete "${p.label}"?\n\nAll models linked to this provider will also be deleted.`)) return; try { await req(`/api/providers/${p.id}`, { method: 'DELETE' }); await fetchProviders(); await fetchModels(); } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed'); } }} className="text-text-muted hover:text-error transition-colors p-1"><Icon name="delete" size={14} /></button>
                       </div>
                     </div>
                   ))}
@@ -239,9 +266,10 @@ export function AdminPage() {
       {editModel && <ModelForm modelType={editModel.modelType} edit={editModel} providers={providers} onClose={() => setEditModel(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editModel.id]; return ns; }); fetchModels(); setEditModel(null); }} />}
       {detailModel && <ModelDetail model={detailModel} onClose={() => setDetailModel(null)} onEdit={() => { setDetailModel(null); setEditModel(detailModel); }} />}
       {showCreateProv && <ProviderForm onClose={() => setShowCreateProv(false)} onSaved={() => { fetchProviders(); setShowCreateProv(false); }} />}
-      {editProv && <ProviderForm edit={editProv} onClose={() => setEditProv(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editProv.id]; return ns; }); fetchProviders(); setEditProv(null); }} />}
+      {editProv && <ProviderForm edit={editProv} onClose={() => setEditProv(null)} onSaved={() => { setTestStatus(s => { const ns = { ...s }; delete ns[editProv.id]; return ns; }); fetchProviders(); fetchModels(); setEditProv(null); }} />}
       {detailProv && <ProviderDetail provider={detailProv} onClose={() => setDetailProv(null)} onEdit={() => { setDetailProv(null); setEditProv(detailProv); }} />}
-      {showAccessModel && <AccessPanel model={showAccessModel} users={users} onClose={() => setShowAccessModel(null)} onGrant={handleAccessGrant} onRevoke={handleAccessRevoke} />}
+      {showAccessModel && <AccessPanel resource={showAccessModel} resourceType="model" users={users} onClose={() => setShowAccessModel(null)} onGrant={handleAccessGrant} onRevoke={handleAccessRevoke} />}
+      {showAccessProvider && <AccessPanel resource={showAccessProvider} resourceType="provider" users={users} onClose={() => setShowAccessProvider(null)} onGrant={handleProviderAccessGrant} onRevoke={handleProviderAccessRevoke} />}
       {showCreateUser && <CreateUserForm onClose={() => setShowCreateUser(false)} onCreated={() => { fetchUsers(); setShowCreateUser(false); }} />}
     </>
   );
@@ -304,8 +332,13 @@ function ModelCard({ model, isAdmin, onDelete, onSetDefault, onDetail, onEdit, o
   );
 }
 
-function AccessPanel({ model, users, onClose, onGrant, onRevoke }: { model: Model; users: AuthUser[]; onClose: () => void; onGrant: (userId: string) => void; onRevoke: (userId: string) => void }) {
-  const assignedIds = model.assignedTo ?? [];
+function AccessPanel({ resource, resourceType, users, onClose, onGrant, onRevoke }: {
+  resource: { id: string; label: string; assignedTo: string[] | null };
+  resourceType: 'model' | 'provider';
+  users: AuthUser[]; onClose: () => void;
+  onGrant: (userId: string) => void; onRevoke: (userId: string) => void;
+}) {
+  const assignedIds = resource.assignedTo ?? [];
   const plainUsers = users.filter((u) => u.role === 'user');
   const assigned = plainUsers.filter((u) => assignedIds.includes(u.id));
   const unassigned = plainUsers.filter((u) => !assignedIds.includes(u.id));
@@ -317,7 +350,7 @@ function AccessPanel({ model, users, onClose, onGrant, onRevoke }: { model: Mode
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-[16px] font-bold text-on-surface">Access</h3>
-            <p className="text-[12px] text-text-muted truncate max-w-[240px]">{model.label}</p>
+            <p className="text-[12px] text-text-muted truncate max-w-[240px]">{resource.label}</p>
           </div>
           <button onClick={onClose} className="text-text-muted hover:text-on-surface"><Icon name="close" size={18} /></button>
         </div>
@@ -622,6 +655,12 @@ function ProviderForm({ edit, onClose, onSaved }: { edit?: Provider; onClose: ()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(''); setSubmitting(true);
+    if (edit && edit.isSystem && !isSystem) {
+      if (!confirm('Unchecking "System provider" will delete all models linked to this provider. Continue?')) {
+        setSubmitting(false);
+        return;
+      }
+    }
     try {
       const body: Record<string, unknown> = { label, provider, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined, isSystem };
       if (edit) {

@@ -9,6 +9,7 @@ import {
 import { embedTexts, rankByEmbeddingSimilarity } from './embeddings.js';
 import { logger, summarizeText } from './logger.js';
 import type { EmbeddingConfig } from './types.js';
+import { secureFetch } from './ip-check.js';
 
 export type SourceInputs = {
   sourceText?: string;
@@ -199,7 +200,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
 
   const repoApiUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`;
   assertAllowedUrl(repoApiUrl);
-  const repoRes = await fetch(repoApiUrl, { headers });
+  const repoRes = await secureFetch(repoApiUrl, { headers });
   if (!repoRes.ok) {
     throw new Error(`Unable to fetch repository metadata (${repoRes.status})`);
   }
@@ -216,7 +217,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
     authenticated: Boolean(config.GITHUB_TOKEN)
   });
 
-  const treeRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, { headers });
+  const treeRes = await secureFetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, { headers });
   if (!treeRes.ok) {
     throw new Error(`Unable to fetch repository tree (${treeRes.status})`);
   }
@@ -260,7 +261,7 @@ async function fetchGitHubRepoDocuments(githubRepoUrl: string, topicTerms: Set<s
     const safePath = entry.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     const rawUrl = `https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/${safeRef}/${safePath}`;
     assertAllowedUrl(rawUrl);
-    const fileRes = await fetch(rawUrl, { headers: { 'User-Agent': 'quiz-gpt' } });
+    const fileRes = await secureFetch(rawUrl, { headers: { 'User-Agent': 'quiz-gpt' } });
     if (!fileRes.ok) continue;
 
     const contentType = fileRes.headers.get('content-type');

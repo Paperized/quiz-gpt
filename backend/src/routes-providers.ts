@@ -5,6 +5,7 @@ import { ANTHROPIC_API_VERSION, config } from './config.js';
 import { logger } from './logger.js';
 import { authRequired, requireAdmin, isAdminUser } from './auth.js';
 import { encryptValue, decryptValue, maskSecret } from './encryption.js';
+import { validateBaseUrlForSSRF, secureFetch } from './ip-check.js';
 
 export const providerRoutes = Router();
 providerRoutes.use(authRequired);
@@ -104,6 +105,10 @@ providerRoutes.post('/', async (req, res) => {
     const key = config.SETTINGS_ENCRYPTION_KEY;
     if (!key) { res.status(500).json({ error: 'Encryption not configured' }); return; }
     const adm = isAdminUser(req);
+    if (baseUrl && !adm) {
+      const ssrf = await validateBaseUrlForSSRF(baseUrl);
+      if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+    }
     const finalSystem = adm ? (isSystem ?? false) : false;
     const encrypted = encryptValue(apiKey, key);
     const { rows } = await pool.query<Record<string, unknown>>(
@@ -132,12 +137,21 @@ providerRoutes.patch('/:id', async (req, res) => {
     const updates: string[] = []; const vals: (string | null)[] = []; let i = 1;
     if (body.data.label !== undefined) { updates.push(`label = $${i++}`); vals.push(body.data.label); }
     if (body.data.provider !== undefined) { updates.push(`provider = $${i++}`); vals.push(body.data.provider); }
-    if (body.data.baseUrl !== undefined) { updates.push(`base_url = $${i++}`); vals.push(body.data.baseUrl); }
+    if (body.data.baseUrl !== undefined) {
+      if (!ex[0].is_system && !adm) {
+        const ssrf = await validateBaseUrlForSSRF(body.data.baseUrl);
+        if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+      }
+      updates.push(`base_url = $${i++}`); vals.push(body.data.baseUrl);
+    }
     if (body.data.apiKey !== undefined) {
       const key = config.SETTINGS_ENCRYPTION_KEY; if (!key) { res.status(500).json({ error: 'Encryption not configured' }); return; }
       updates.push(`api_key_encrypted = $${i++}`); vals.push(encryptValue(body.data.apiKey, key));
     }
     if (body.data.isSystem !== undefined && adm) {
+      if (ex[0].is_system && !body.data.isSystem) {
+        await pool.query('DELETE FROM models WHERE provider_id = $1', [id]);
+      }
       updates.push(`is_system = $${i++}`); vals.push(body.data.isSystem as unknown as string);
     }
     if (updates.length === 0) { res.status(400).json({ error: 'No fields' }); return; }
@@ -159,8 +173,8 @@ providerRoutes.delete('/:id', async (req, res) => {
     const adm = isAdminUser(req);
     if (!adm && ex[0].created_by !== req.user.id) { res.status(403).json({ error: 'Not authorized' }); return; }
     if (adm && ex[0].created_by !== req.user.id && !ex[0].is_system) { res.status(403).json({ error: 'Cannot delete private provider' }); return; }
-    // Nullify references in models
-    await pool.query('UPDATE models SET provider_id = NULL WHERE provider_id = $1', [id]);
+    // Delete models linked to this provider
+    await pool.query('DELETE FROM models WHERE provider_id = $1', [id]);
     await pool.query('DELETE FROM providers WHERE id = $1', [id]);
     logger.info('provider_deleted', { providerId: id });
     res.status(204).send();
@@ -194,6 +208,7 @@ providerRoutes.delete('/:id/access/:userId', requireAdmin, async (req, res) => {
     if (ex.length === 0) { res.status(404).json({ error: 'Not found' }); return; }
     if (!ex[0].is_system) { res.status(400).json({ error: 'Only system providers' }); return; }
     await pool.query('DELETE FROM provider_access WHERE provider_id = $1 AND user_id = $2', [id, userId]);
+    await pool.query('DELETE FROM models WHERE provider_id = $1 AND created_by = $2 AND is_system = false', [id, userId]);
     logger.info('provider_access_revoked', { providerId: id, userId });
     res.status(204).send();
   } catch (err) { logger.error('providers_access_revoke', err); res.status(500).json({ error: 'Internal error' }); }
@@ -221,10 +236,15 @@ providerRoutes.post('/test', async (req, res) => {
     const body = providerTestSchema.safeParse(req.body);
     if (!body.success) { res.status(400).json({ error: 'Invalid input', details: body.error.flatten() }); return; }
     const { provider, baseUrl, apiKey } = body.data;
+    const adm = isAdminUser(req);
+    if (baseUrl && !adm) {
+      const ssrf = await validateBaseUrlForSSRF(baseUrl);
+      if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+    }
     const resolved = normalizeBaseUrl(baseUrl, provider);
 
     if (provider === 'anthropic') {
-      const resp = await fetch(`${resolved}/messages`, {
+      const resp = await secureFetch(`${resolved}/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -248,7 +268,7 @@ providerRoutes.post('/test', async (req, res) => {
 
     // openai / openai_compatible
     const endpoint = resolved.endsWith('/v1') ? `${resolved}/models` : `${resolved}/v1/models`;
-    const resp = await fetch(endpoint, {
+    const resp = await secureFetch(endpoint, {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
@@ -272,19 +292,24 @@ providerRoutes.post('/:id/test', async (req, res) => {
     const { id } = req.params;
     const allowed = await canAccessProvider(id, req.user.id, isAdminUser(req));
     if (!allowed) { res.status(403).json({ error: 'Not authorized' }); return; }
-    const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
-      'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [id]
+    const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string; is_system: boolean }>(
+      'SELECT provider, base_url, api_key_encrypted, is_system FROM providers WHERE id = $1', [id]
     );
     if (ex.length === 0) { res.status(404).json({ error: 'Not found' }); return; }
-    const { provider, base_url, api_key_encrypted } = ex[0];
+    const { provider, base_url, api_key_encrypted, is_system: provIsSystem } = ex[0];
     const key = config.SETTINGS_ENCRYPTION_KEY;
     const apiKey = key ? decryptValue(api_key_encrypted, key) : '';
     if (!apiKey) { res.json({ ok: false, error: 'Cannot decrypt API key' }); return; }
 
     const resolved = normalizeBaseUrl(base_url ?? undefined, provider);
+    const adm = isAdminUser(req);
+    if (resolved && !adm && !provIsSystem) {
+      const ssrf = await validateBaseUrlForSSRF(resolved);
+      if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+    }
 
     if (provider === 'anthropic') {
-      const resp = await fetch(`${resolved}/messages`, {
+      const resp = await secureFetch(`${resolved}/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -300,7 +325,7 @@ providerRoutes.post('/:id/test', async (req, res) => {
     }
 
     const endpoint = resolved.endsWith('/v1') ? `${resolved}/models` : `${resolved}/v1/models`;
-    const resp = await fetch(endpoint, {
+    const resp = await secureFetch(endpoint, {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
     });
     if (resp.ok) return res.json({ ok: true });
@@ -319,11 +344,11 @@ providerRoutes.get('/:id/models', async (req, res) => {
     const { id } = req.params;
     const allowed = await canAccessProvider(id, req.user.id, isAdminUser(req));
     if (!allowed) { res.status(403).json({ error: 'Not authorized' }); return; }
-    const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string }>(
-      'SELECT provider, base_url, api_key_encrypted FROM providers WHERE id = $1', [id]
+    const { rows: ex } = await pool.query<{ provider: string; base_url: string | null; api_key_encrypted: string; is_system: boolean }>(
+      'SELECT provider, base_url, api_key_encrypted, is_system FROM providers WHERE id = $1', [id]
     );
     if (ex.length === 0) { res.status(404).json({ error: 'Not found' }); return; }
-    const { provider, base_url, api_key_encrypted } = ex[0];
+    const { provider, base_url, api_key_encrypted, is_system: provIsSystem } = ex[0];
 
     if (provider === 'anthropic') {
       return res.json({ models: [] });
@@ -334,8 +359,13 @@ providerRoutes.get('/:id/models', async (req, res) => {
     if (!apiKey) { res.status(400).json({ error: 'Cannot decrypt API key' }); return; }
 
     const resolved = normalizeBaseUrl(base_url ?? undefined, provider);
+    const adm = isAdminUser(req);
+    if (resolved && !adm && !provIsSystem) {
+      const ssrf = await validateBaseUrlForSSRF(resolved);
+      if (!ssrf.safe) { res.status(400).json({ error: ssrf.reason || 'Invalid base URL' }); return; }
+    }
     const endpoint = resolved.endsWith('/v1') ? `${resolved}/models` : `${resolved}/v1/models`;
-    const resp = await fetch(endpoint, {
+    const resp = await secureFetch(endpoint, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
     });
     if (!resp.ok) {
