@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const DEFAULT_LLM_MAX_TOKENS = 2000;
+export const DEFAULT_LLM_MAX_TOKENS = 4000;
 export const DEFAULT_LLM_TEMPERATURE = 0.7;
 export const DEFAULT_EMBEDDING_BATCH_SIZE = 64;
 export const DEFAULT_MAX_RETRIEVED_CHUNKS = 16;
