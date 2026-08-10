@@ -88,7 +88,7 @@ async function generateStructuredOutput<T>(
     return schema.parse(object);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
-    if (!/could not parse the response|No object generated/i.test(message)) {
+    if (!/could not parse the response|No object generated|is not valid JSON/i.test(message)) {
       throw error;
     }
 

@@ -1,6 +1,5 @@
-# Frontend build — pinned to amd64 because rolldown (Vite 8) has no arm/v7 native binding.
-# Output is platform-independent static files (HTML/JS/CSS).
-FROM --platform=linux/amd64 node:22-alpine AS build-frontend
+# The frontend bundle is platform-independent static files (HTML/JS/CSS).
+FROM node:22-alpine AS build-frontend
 WORKDIR /app
 COPY package*.json ./
 COPY frontend/package*.json frontend/
